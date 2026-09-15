@@ -17,8 +17,7 @@ constexpr double PI =
 //
 // Unpolarized electron gas.
 //
-// Reference parameterization:
-// Perdew and Wang, 1992.
+// Perdew-Wang 1992 parameterization.
 // ================================================================
 
 constexpr double PW92_A =
@@ -87,6 +86,18 @@ void normalize(
     std::vector<double>& u,
     double dr)
 {
+    if (u.empty())
+    {
+        throw std::runtime_error(
+            "Cannot normalize empty orbital.");
+    }
+
+    if (dr <= 0.0)
+    {
+        throw std::runtime_error(
+            "Grid spacing must be positive.");
+    }
+
     double norm = 0.0;
 
     for (double value : u)
@@ -94,10 +105,10 @@ void normalize(
 
     norm = std::sqrt(norm);
 
-    if (norm <= 0.0)
+    if (!std::isfinite(norm) || norm <= 0.0)
     {
         throw std::runtime_error(
-            "Cannot normalize zero orbital.");
+            "Cannot normalize zero or invalid orbital.");
     }
 
     for (double& value : u)
@@ -119,6 +130,21 @@ std::vector<double> solveTridiagonal(
     const int N =
         static_cast<int>(diagonal.size());
 
+    if (N == 0)
+    {
+        throw std::runtime_error(
+            "Cannot solve empty tridiagonal system.");
+    }
+
+    if (
+        static_cast<int>(lower.size()) != N ||
+        static_cast<int>(upper.size()) != N ||
+        static_cast<int>(rhs.size()) != N)
+    {
+        throw std::runtime_error(
+            "Invalid tridiagonal matrix dimensions.");
+    }
+
     std::vector<double> a = lower;
     std::vector<double> b = diagonal;
     std::vector<double> c = upper;
@@ -127,16 +153,24 @@ std::vector<double> solveTridiagonal(
     constexpr double MIN_PIVOT =
         1.0e-14;
 
+    // ------------------------------------------------------------
+    // Forward elimination
+    // ------------------------------------------------------------
+
     for (int i = 1;
          i < N;
          ++i)
     {
+        if (!std::isfinite(b[i - 1]))
+        {
+            throw std::runtime_error(
+                "Non-finite pivot encountered.");
+        }
+
         if (std::abs(b[i - 1]) < MIN_PIVOT)
         {
-            b[i - 1] =
-                b[i - 1] < 0.0
-                ? -MIN_PIVOT
-                : MIN_PIVOT;
+            throw std::runtime_error(
+                "Singular or ill-conditioned tridiagonal system.");
         }
 
         const double multiplier =
@@ -149,13 +183,21 @@ std::vector<double> solveTridiagonal(
             multiplier * d[i - 1];
     }
 
+    if (!std::isfinite(b[N - 1]))
+    {
+        throw std::runtime_error(
+            "Non-finite final pivot encountered.");
+    }
+
     if (std::abs(b[N - 1]) < MIN_PIVOT)
     {
-        b[N - 1] =
-            b[N - 1] < 0.0
-            ? -MIN_PIVOT
-            : MIN_PIVOT;
+        throw std::runtime_error(
+            "Singular or ill-conditioned tridiagonal system.");
     }
+
+    // ------------------------------------------------------------
+    // Back substitution
+    // ------------------------------------------------------------
 
     std::vector<double> x(
         N,
@@ -168,6 +210,12 @@ std::vector<double> solveTridiagonal(
          i >= 0;
          --i)
     {
+        if (std::abs(b[i]) < MIN_PIVOT)
+        {
+            throw std::runtime_error(
+                "Singular or ill-conditioned tridiagonal system.");
+        }
+
         x[i] =
             (
                 d[i]
@@ -195,6 +243,20 @@ void applyHamiltonian(
 {
     const int N =
         static_cast<int>(u.size());
+
+    if (
+        static_cast<int>(potential.size()) != N ||
+        static_cast<int>(Hu.size()) != N)
+    {
+        throw std::runtime_error(
+            "Hamiltonian vector dimensions do not match.");
+    }
+
+    if (N == 0 || dr <= 0.0)
+    {
+        throw std::runtime_error(
+            "Invalid radial grid.");
+    }
 
     const double inverseDr2 =
         1.0 / (dr * dr);
@@ -243,6 +305,22 @@ OrbitalResult solveGroundState(
     const int N =
         static_cast<int>(potential.size());
 
+    if (N < 2)
+    {
+        throw std::runtime_error(
+            "Ground-state solver requires at least two grid points.");
+    }
+
+    if (dr <= 0.0)
+    {
+        throw std::runtime_error(
+            "Grid spacing must be positive.");
+    }
+
+    // ------------------------------------------------------------
+    // Construct tridiagonal Hamiltonian
+    // ------------------------------------------------------------
+
     const double diagonalKinetic =
         1.0 / (dr * dr);
 
@@ -264,6 +342,8 @@ OrbitalResult solveGroundState(
 
     // ------------------------------------------------------------
     // Sturm count
+    //
+    // Returns number of eigenvalues strictly below energy.
     // ------------------------------------------------------------
 
     auto countBelow =
@@ -323,10 +403,26 @@ OrbitalResult solveGroundState(
     double upperEnergy = 10.0;
 
     while (countBelow(lowerEnergy) >= 1)
+    {
         lowerEnergy *= 2.0;
 
+        if (!std::isfinite(lowerEnergy))
+        {
+            throw std::runtime_error(
+                "Unable to bracket lowest eigenvalue.");
+        }
+    }
+
     while (countBelow(upperEnergy) < 1)
+    {
         upperEnergy *= 2.0;
+
+        if (!std::isfinite(upperEnergy))
+        {
+            throw std::runtime_error(
+                "Unable to bracket lowest eigenvalue.");
+        }
+    }
 
     // ------------------------------------------------------------
     // Bisection
@@ -375,6 +471,8 @@ OrbitalResult solveGroundState(
 
     // ------------------------------------------------------------
     // Initial orbital
+    //
+    // Hydrogen-like 1s radial form.
     // ------------------------------------------------------------
 
     std::vector<double> u(
@@ -406,6 +504,9 @@ OrbitalResult solveGroundState(
 
     constexpr int MAX_INVERSE_ITERATIONS =
         40;
+
+    constexpr double ORBITAL_TOLERANCE =
+        1.0e-12;
 
     for (int iteration = 0;
          iteration < MAX_INVERSE_ITERATIONS;
@@ -496,7 +597,7 @@ OrbitalResult solveGroundState(
 
         if (
             std::sqrt(difference)
-            < 1.0e-12
+            < ORBITAL_TOLERANCE
         )
         {
             break;
@@ -529,6 +630,12 @@ OrbitalResult solveGroundState(
             * dr;
     }
 
+    if (!std::isfinite(eigenvalue))
+    {
+        throw std::runtime_error(
+            "Ground-state eigenvalue is not finite.");
+    }
+
     return
     {
         std::move(u),
@@ -542,9 +649,13 @@ OrbitalResult solveGroundState(
 // rho(r) = Ne |u(r)|² / (4 pi r²)
 //
 // V_H(r) = Ne [
+//
 //     1/r integral_0^r |u(r')|² dr'
+//
 //     +
+//
 //     integral_r^Rmax |u(r')|²/r' dr'
+//
 // ]
 // ================================================================
 
@@ -555,6 +666,24 @@ std::vector<double> calculateHartreePotential(
 {
     const int N =
         static_cast<int>(u.size());
+
+    if (N == 0)
+    {
+        throw std::runtime_error(
+            "Cannot calculate Hartree potential for empty orbital.");
+    }
+
+    if (dr <= 0.0)
+    {
+        throw std::runtime_error(
+            "Grid spacing must be positive.");
+    }
+
+    if (electrons <= 0)
+    {
+        throw std::runtime_error(
+            "Electron count must be positive.");
+    }
 
     std::vector<double> cumulative(
         N,
@@ -675,6 +804,10 @@ double calculateDensity(
     double r,
     int electrons)
 {
+    if (r <= 0.0)
+        throw std::runtime_error(
+            "Radial coordinate must be positive.");
+
     return
         static_cast<double>(electrons)
         * u
@@ -691,7 +824,7 @@ double calculateDensity(
 // ================================================================
 // LDA Dirac exchange energy per electron
 //
-//     epsilon_x(rho)
+// epsilon_x(rho)
 //     = -3/4 (3/pi)^(1/3) rho^(1/3)
 // ================================================================
 
@@ -710,7 +843,7 @@ double exchangeEnergyPerParticle(
 // ================================================================
 // LDA Dirac exchange potential
 //
-//     v_x(rho)
+// v_x(rho)
 //     = -(3/pi)^(1/3) rho^(1/3)
 // ================================================================
 
@@ -726,12 +859,14 @@ double exchangePotential(
 }
 
 // ================================================================
-// PW92 correlation energy per electron
+// PW92 correlation energy per particle
 //
 // r_s = (3 / (4 pi rho))^(1/3)
 //
 // epsilon_c(r_s) =
+//
 // -2 A (1 + alpha1 r_s)
+//
 // ln(
 //     1 +
 //     1 /
@@ -802,11 +937,11 @@ double correlationEnergyPerParticle(
 // ================================================================
 // PW92 correlation potential
 //
-//     v_c(rho)
+// v_c(rho)
 //     = epsilon_c
 //       - (r_s / 3) d epsilon_c / d r_s
 //
-// The derivative is evaluated analytically.
+// The derivative is analytical.
 // ================================================================
 
 double correlationPotential(
@@ -865,15 +1000,27 @@ double correlationPotential(
         )
         * logarithm;
 
+    // ------------------------------------------------------------
+    // d[denominatorCore] / dr_s
+    // ------------------------------------------------------------
+
     const double derivativeCore =
         PW92_BETA1
             / (2.0 * sqrtRs)
         +
         PW92_BETA2
         +
-        1.5 * PW92_BETA3 * sqrtRs
+        1.5
+        * PW92_BETA3
+        * sqrtRs
         +
-        2.0 * PW92_BETA4 * rs;
+        2.0
+        * PW92_BETA4
+        * rs;
+
+    // ------------------------------------------------------------
+    // d[ln(1 + 1/denominator)] / dr_s
+    // ------------------------------------------------------------
 
     const double derivativeLogarithm =
         -derivativeCore
@@ -882,6 +1029,10 @@ double correlationPotential(
             denominatorCore
             * (1.0 + denominator)
         );
+
+    // ------------------------------------------------------------
+    // d epsilon_c / dr_s
+    // ------------------------------------------------------------
 
     const double derivativeEpsilon =
         -2.0
@@ -897,6 +1048,10 @@ double correlationPotential(
             * derivativeLogarithm
         );
 
+    // ------------------------------------------------------------
+    // v_c = epsilon_c - r_s/3 * d epsilon_c/dr_s
+    // ------------------------------------------------------------
+
     return
         epsilonC
         -
@@ -906,6 +1061,8 @@ double correlationPotential(
 
 // ================================================================
 // LDA exchange-correlation potential
+//
+//     V_xc = V_x + V_c
 // ================================================================
 
 std::vector<double> calculateExchangeCorrelationPotential(
@@ -958,7 +1115,7 @@ std::vector<double> calculateExchangeCorrelationPotential(
 //       + E_x
 //       + E_c
 //
-// For the closed-shell He system:
+// For closed-shell He:
 //
 //     T_s = 2 T_orbital
 // ================================================================
@@ -970,6 +1127,17 @@ double calculateTotalEnergy(
     double dr,
     int electrons)
 {
+    const int N =
+        static_cast<int>(u.size());
+
+    if (
+        static_cast<int>(Vext.size()) != N ||
+        static_cast<int>(VH.size()) != N)
+    {
+        throw std::runtime_error(
+            "Energy vectors have inconsistent dimensions.");
+    }
+
     double orbitalKineticEnergy = 0.0;
     double externalEnergy = 0.0;
     double hartreeEnergy = 0.0;
@@ -978,10 +1146,19 @@ double calculateTotalEnergy(
 
     // ------------------------------------------------------------
     // Kinetic energy of one spatial orbital
+    //
+    // Piecewise-linear derivative over the full radial interval:
+    //
+    //     [0, dr],
+    //     [dr, 2dr],
+    //     ...
+    //     [Ndr, Rmax]
+    //
+    // with u(0)=u(Rmax)=0.
     // ------------------------------------------------------------
 
     for (int interval = 0;
-         interval <= static_cast<int>(u.size());
+         interval <= N;
          ++interval)
     {
         double derivative = 0.0;
@@ -991,12 +1168,10 @@ double calculateTotalEnergy(
             derivative =
                 u[0] / dr;
         }
-        else if (
-            interval
-            == static_cast<int>(u.size()))
+        else if (interval == N)
         {
             derivative =
-                -u.back() / dr;
+                -u[N - 1] / dr;
         }
         else
         {
@@ -1024,7 +1199,7 @@ double calculateTotalEnergy(
     // ------------------------------------------------------------
 
     for (int i = 0;
-         i < static_cast<int>(u.size());
+         i < N;
          ++i)
     {
         const double r =
@@ -1035,6 +1210,9 @@ double calculateTotalEnergy(
 
         // --------------------------------------------------------
         // Nuclear attraction
+        //
+        // E_ext = integral rho V_ext d^3r
+        //       = Ne integral |u|² V_ext dr
         // --------------------------------------------------------
 
         externalEnergy +=
@@ -1046,7 +1224,7 @@ double calculateTotalEnergy(
         // --------------------------------------------------------
         // Hartree energy
         //
-        // E_H = 1/2 integral rho V_H d³r
+        // E_H = 1/2 integral rho V_H d^3r
         // --------------------------------------------------------
 
         hartreeEnergy +=
@@ -1110,7 +1288,7 @@ double calculateTotalEnergy(
 //
 //     H = -1/2 ∇² - 1/r
 //
-// The electron-electron terms are disabled for this validation.
+// Electron-electron terms are disabled for this validation.
 // ================================================================
 
 void runHydrogen()
@@ -1383,14 +1561,45 @@ SCFResult runHelium()
             orbital.eigenvalue;
 
         // --------------------------------------------------------
+        // Calculate raw density residual
+        //
+        // This is deliberately calculated BEFORE mixing:
+        //
+        //     dRho = integral |rho_new - rho_old| dr
+        //
+        // The previous implementation measured the change after
+        // mixing, which is smaller by approximately the mixing
+        // factor. The raw residual is the more direct SCF
+        // convergence criterion.
+        // --------------------------------------------------------
+
+        densityError = 0.0;
+
+        for (int i = 0;
+             i < N;
+             ++i)
+        {
+            const double oldDensity =
+                u[i] * u[i];
+
+            const double newDensity =
+                orbital.u[i]
+                * orbital.u[i];
+
+            densityError +=
+                std::abs(
+                    newDensity
+                    - oldDensity)
+                * dr;
+        }
+
+        // --------------------------------------------------------
         // Mix densities
         // --------------------------------------------------------
 
         std::vector<double> mixedU(
             N,
             0.0);
-
-        densityError = 0.0;
 
         for (int i = 0;
              i < N;
@@ -1418,35 +1627,11 @@ SCFResult runHelium()
                     std::max(
                         0.0,
                         mixedDensity));
-
-            densityError +=
-                std::abs(
-                    mixedDensity
-                    - oldDensity)
-                * dr;
         }
 
         // --------------------------------------------------------
-        // Fix global orbital sign
+        // Normalize mixed orbital
         // --------------------------------------------------------
-
-        double overlap = 0.0;
-
-        for (int i = 0;
-             i < N;
-             ++i)
-        {
-            overlap +=
-                orbital.u[i]
-                * mixedU[i]
-                * dr;
-        }
-
-        if (overlap < 0.0)
-        {
-            for (double& value : mixedU)
-                value *= -1.0;
-        }
 
         normalize(
             mixedU,
@@ -1477,10 +1662,24 @@ SCFResult runHelium()
                 dr,
                 electrons);
 
-        const double energyChange =
-            std::abs(
-                totalEnergy
-                - previousEnergy);
+        // --------------------------------------------------------
+        // Energy change
+        // --------------------------------------------------------
+
+        double energyChange = 0.0;
+
+        if (iteration > 1)
+        {
+            energyChange =
+                std::abs(
+                    totalEnergy
+                    - previousEnergy);
+        }
+        else
+        {
+            energyChange =
+                std::abs(totalEnergy);
+        }
 
         // --------------------------------------------------------
         // Output
@@ -1515,6 +1714,9 @@ SCFResult runHelium()
 
         // --------------------------------------------------------
         // SCF convergence
+        //
+        // Both the raw density residual and energy change must
+        // satisfy the tolerance.
         // --------------------------------------------------------
 
         if (
