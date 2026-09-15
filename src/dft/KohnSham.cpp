@@ -12,9 +12,6 @@ namespace
     constexpr double PI =
         PhysicalConstants::PI;
 
-    constexpr double EPSILON =
-        1.0e-12;
-
     constexpr double DENSITY_EPSILON =
         1.0e-14;
 
@@ -114,6 +111,36 @@ void KohnSham::buildFockMatrix(
         dimension,
         "density"
     );
+
+    /*
+        A one-electron system has no
+        electron-electron interaction.
+
+        Therefore:
+
+            F = H_core
+
+        for Ne = 1.
+
+        This is a general physical rule and
+        is not specific to hydrogen.
+    */
+    if (molecularSystem->getElectronCount() == 1)
+    {
+        coulombMatrix =
+            createMatrix(dimension);
+
+        exchangeCorrelationMatrix =
+            createMatrix(dimension);
+
+        exchangeCorrelationEnergy =
+            0.0;
+
+        fockMatrix =
+            coreHamiltonian;
+
+        return;
+    }
 
     buildCoulombMatrix(
         densityMatrix
@@ -290,7 +317,8 @@ void KohnSham::buildCoulombMatrix(
              nu < dimension;
              ++nu)
         {
-            double value = 0.0;
+            double value =
+                0.0;
 
             for (std::size_t lambda = 0;
                  lambda < dimension;
@@ -327,7 +355,8 @@ void KohnSham::buildExchangeCorrelationMatrix(
     exchangeCorrelationMatrix =
         createMatrix(dimension);
 
-    double electronCount = 0.0;
+    double electronCount =
+        0.0;
 
     for (std::size_t mu = 0;
          mu < dimension;

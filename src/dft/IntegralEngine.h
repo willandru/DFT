@@ -58,23 +58,7 @@ public:
 
 private:
 
-    struct GridPoint
-    {
-        double x;
-        double y;
-        double z;
-        double weight;
-    };
-
     const BasisSet* basisSet;
-
-    std::vector<GridPoint> grid;
-
-    std::vector<double> basisValues;
-
-    std::vector<double> laplacianValues;
-
-    std::vector<double> nuclearPotentialValues;
 
     Matrix overlapMatrix;
 
@@ -86,55 +70,93 @@ private:
 
     double nuclearRepulsionEnergy;
 
-    int gridPointsPerAxis;
-
-    double gridSpacing;
-
-    double gridMargin;
-
-    double laplacianStep;
-
-    void buildGrid();
-
-    void evaluateBasisFunctions();
-
-    void evaluateLaplacians();
-
-    void evaluateNuclearPotential();
-
-    double evaluateBasisFunction(
-        const BasisSet::BasisFunction& function,
-        double x,
-        double y,
-        double z
-    ) const;
-
-    double evaluatePrimitiveGaussian(
-        const BasisSet::BasisFunction& function,
-        const BasisSet::PrimitiveGaussian& primitive,
-        double x,
-        double y,
-        double z
-    ) const;
-
-    double evaluateBasisFunctionLaplacian(
-        const BasisSet::BasisFunction& function,
-        double x,
-        double y,
-        double z
-    ) const;
-
-    double evaluateNuclearPotential(
-        double x,
-        double y,
-        double z
-    ) const;
-
     void calculateOneElectronIntegrals();
 
     void calculateTwoElectronIntegrals();
 
     void calculateNuclearRepulsion();
+
+    double calculatePrimitiveOverlap(
+        const BasisSet::BasisFunction& functionA,
+        const BasisSet::PrimitiveGaussian& primitiveA,
+        const BasisSet::BasisFunction& functionB,
+        const BasisSet::PrimitiveGaussian& primitiveB
+    ) const;
+
+    double calculatePrimitiveKinetic(
+        const BasisSet::BasisFunction& functionA,
+        const BasisSet::PrimitiveGaussian& primitiveA,
+        const BasisSet::BasisFunction& functionB,
+        const BasisSet::PrimitiveGaussian& primitiveB
+    ) const;
+
+    double calculatePrimitiveNuclearAttraction(
+        const BasisSet::BasisFunction& functionA,
+        const BasisSet::PrimitiveGaussian& primitiveA,
+        const BasisSet::BasisFunction& functionB,
+        const BasisSet::PrimitiveGaussian& primitiveB,
+        const MolecularSystem::Atom& nucleus
+    ) const;
+
+    double boysFunctionF0(
+        double value
+    ) const;
+
+    double boysFunction(
+        int order,
+        double value
+    ) const;
+
+    double calculateOneDimensionalOverlap(
+        int angularMomentumA,
+        int angularMomentumB,
+        double centerA,
+        double centerB,
+        double alpha,
+        double beta
+    ) const;
+
+    double calculateCartesianOverlap(
+        int angularMomentumAX,
+        int angularMomentumAY,
+        int angularMomentumAZ,
+        int angularMomentumBX,
+        int angularMomentumBY,
+        int angularMomentumBZ,
+        double ax,
+        double ay,
+        double az,
+        double bx,
+        double by,
+        double bz,
+        double alpha,
+        double beta
+    ) const;
+
+    struct HermiteCoefficients
+    {
+        double values[3] = {0.0, 0.0, 0.0};
+    };
+
+    HermiteCoefficients calculateHermiteCoefficients(
+        int angularMomentumA,
+        int angularMomentumB,
+        double centerA,
+        double centerB,
+        double alpha,
+        double beta
+    ) const;
+
+    double calculateHermiteCoulombIntegral(
+        int t,
+        int u,
+        int v,
+        int order,
+        double x,
+        double y,
+        double z,
+        double gamma
+    ) const;
 
     static Matrix createMatrix(
         std::size_t dimension
