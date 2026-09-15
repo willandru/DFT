@@ -13,16 +13,42 @@ constexpr double PI =
     3.1415926535897932384626433832795;
 
 // ================================================================
+// PW92 LDA correlation parameters
+//
+// Unpolarized electron gas.
+//
+// Reference parameterization:
+// Perdew and Wang, 1992.
+// ================================================================
+
+constexpr double PW92_A =
+    0.0310907;
+
+constexpr double PW92_ALPHA1 =
+    0.21370;
+
+constexpr double PW92_BETA1 =
+    7.5957;
+
+constexpr double PW92_BETA2 =
+    3.5876;
+
+constexpr double PW92_BETA3 =
+    1.6382;
+
+constexpr double PW92_BETA4 =
+    0.49294;
+
+// ================================================================
 // Radial coordinate
 //
-// The vector contains only physical interior points:
+// Physical grid:
 //
 //     r_i = (i + 1) dr
 //
-// The boundaries r = 0 and r = Rmax are outside the vector and
-// satisfy:
+// Boundary conditions:
 //
-//     u(0) = 0
+//     u(0)    = 0
 //     u(Rmax) = 0
 // ================================================================
 
@@ -159,10 +185,6 @@ std::vector<double> solveTridiagonal(
 //     H = -1/2 d²/dr² + V(r)
 //
 // for l = 0.
-//
-// Boundary conditions are implicit:
-//     u(0) = 0
-//     u(Rmax) = 0
 // ================================================================
 
 void applyHamiltonian(
@@ -208,9 +230,10 @@ void applyHamiltonian(
 // ================================================================
 // Solve lowest eigenstate
 //
-// 1. Build tridiagonal Hamiltonian.
-// 2. Find lowest eigenvalue with Sturm counting.
-// 3. Recover eigenvector with inverse iteration.
+// 1. Tridiagonal Hamiltonian.
+// 2. Sturm count.
+// 3. Bisection for lowest eigenvalue.
+// 4. Inverse iteration for eigenvector.
 // ================================================================
 
 OrbitalResult solveGroundState(
@@ -376,9 +399,6 @@ OrbitalResult solveGroundState(
 
     // ------------------------------------------------------------
     // Inverse iteration
-    //
-    // The shift is separated from the eigenvalue to avoid an
-    // almost-singular tridiagonal system.
     // ------------------------------------------------------------
 
     const double sigma =
@@ -430,7 +450,7 @@ OrbitalResult solveGroundState(
             dr);
 
         // --------------------------------------------------------
-        // Fix arbitrary global sign
+        // Fix global sign
         // --------------------------------------------------------
 
         double overlap = 0.0;
@@ -645,12 +665,250 @@ std::vector<double> calculateHartreePotential(
 }
 
 // ================================================================
-// LDA Dirac exchange
+// Electron density
 //
-//     v_x(rho) = -(3/pi)^(1/3) rho^(1/3)
+// rho(r) = Ne |u(r)|² / (4 pi r²)
 // ================================================================
 
-std::vector<double> calculateExchangePotential(
+double calculateDensity(
+    double u,
+    double r,
+    int electrons)
+{
+    return
+        static_cast<double>(electrons)
+        * u
+        * u
+        /
+        (
+            4.0
+            * PI
+            * r
+            * r
+        );
+}
+
+// ================================================================
+// LDA Dirac exchange energy per electron
+//
+//     epsilon_x(rho)
+//     = -3/4 (3/pi)^(1/3) rho^(1/3)
+// ================================================================
+
+double exchangeEnergyPerParticle(
+    double density)
+{
+    if (density <= 0.0)
+        return 0.0;
+
+    return
+        -0.75
+        * std::cbrt(3.0 / PI)
+        * std::cbrt(density);
+}
+
+// ================================================================
+// LDA Dirac exchange potential
+//
+//     v_x(rho)
+//     = -(3/pi)^(1/3) rho^(1/3)
+// ================================================================
+
+double exchangePotential(
+    double density)
+{
+    if (density <= 0.0)
+        return 0.0;
+
+    return
+        -std::cbrt(3.0 / PI)
+        * std::cbrt(density);
+}
+
+// ================================================================
+// PW92 correlation energy per electron
+//
+// r_s = (3 / (4 pi rho))^(1/3)
+//
+// epsilon_c(r_s) =
+// -2 A (1 + alpha1 r_s)
+// ln(
+//     1 +
+//     1 /
+//     [2 A (beta1 sqrt(r_s)
+//          + beta2 r_s
+//          + beta3 r_s^(3/2)
+//          + beta4 r_s²)]
+// )
+// ================================================================
+
+double correlationEnergyPerParticle(
+    double density)
+{
+    if (density <= 0.0)
+        return 0.0;
+
+    const double rs =
+        std::cbrt(
+            3.0
+            /
+            (
+                4.0
+                * PI
+                * density
+            )
+        );
+
+    const double sqrtRs =
+        std::sqrt(rs);
+
+    const double rs32 =
+        rs * sqrtRs;
+
+    const double rs2 =
+        rs * rs;
+
+    const double denominator =
+        2.0
+        * PW92_A
+        *
+        (
+            PW92_BETA1 * sqrtRs
+            +
+            PW92_BETA2 * rs
+            +
+            PW92_BETA3 * rs32
+            +
+            PW92_BETA4 * rs2
+        );
+
+    const double logarithm =
+        std::log(
+            1.0
+            + 1.0 / denominator
+        );
+
+    return
+        -2.0
+        * PW92_A
+        *
+        (
+            1.0
+            + PW92_ALPHA1 * rs
+        )
+        * logarithm;
+}
+
+// ================================================================
+// PW92 correlation potential
+//
+//     v_c(rho)
+//     = epsilon_c
+//       - (r_s / 3) d epsilon_c / d r_s
+//
+// The derivative is evaluated analytically.
+// ================================================================
+
+double correlationPotential(
+    double density)
+{
+    if (density <= 0.0)
+        return 0.0;
+
+    const double rs =
+        std::cbrt(
+            3.0
+            /
+            (
+                4.0
+                * PI
+                * density
+            )
+        );
+
+    const double sqrtRs =
+        std::sqrt(rs);
+
+    const double rs32 =
+        rs * sqrtRs;
+
+    const double rs2 =
+        rs * rs;
+
+    const double denominatorCore =
+        PW92_BETA1 * sqrtRs
+        +
+        PW92_BETA2 * rs
+        +
+        PW92_BETA3 * rs32
+        +
+        PW92_BETA4 * rs2;
+
+    const double denominator =
+        2.0
+        * PW92_A
+        * denominatorCore;
+
+    const double logarithm =
+        std::log(
+            1.0
+            + 1.0 / denominator
+        );
+
+    const double epsilonC =
+        -2.0
+        * PW92_A
+        *
+        (
+            1.0
+            + PW92_ALPHA1 * rs
+        )
+        * logarithm;
+
+    const double derivativeCore =
+        PW92_BETA1
+            / (2.0 * sqrtRs)
+        +
+        PW92_BETA2
+        +
+        1.5 * PW92_BETA3 * sqrtRs
+        +
+        2.0 * PW92_BETA4 * rs;
+
+    const double derivativeLogarithm =
+        -derivativeCore
+        /
+        (
+            denominatorCore
+            * (1.0 + denominator)
+        );
+
+    const double derivativeEpsilon =
+        -2.0
+        * PW92_A
+        *
+        (
+            PW92_ALPHA1 * logarithm
+            +
+            (
+                1.0
+                + PW92_ALPHA1 * rs
+            )
+            * derivativeLogarithm
+        );
+
+    return
+        epsilonC
+        -
+        (rs / 3.0)
+        * derivativeEpsilon;
+}
+
+// ================================================================
+// LDA exchange-correlation potential
+// ================================================================
+
+std::vector<double> calculateExchangeCorrelationPotential(
     const std::vector<double>& u,
     double dr,
     int electrons)
@@ -658,12 +916,9 @@ std::vector<double> calculateExchangePotential(
     const int N =
         static_cast<int>(u.size());
 
-    std::vector<double> Vx(
+    std::vector<double> Vxc(
         N,
         0.0);
-
-    const double coefficient =
-        -std::cbrt(3.0 / PI);
 
     for (int i = 0;
          i < N;
@@ -673,43 +928,39 @@ std::vector<double> calculateExchangePotential(
             radiusAt(i, dr);
 
         const double density =
-            static_cast<double>(electrons)
-            *
-            u[i]
-            * u[i]
-            /
-            (
-                4.0
-                * PI
-                * r
-                * r
-            );
+            calculateDensity(
+                u[i],
+                r,
+                electrons);
 
-        if (density > 0.0)
-        {
-            Vx[i] =
-                coefficient
-                * std::cbrt(density);
-        }
+        const double Vx =
+            exchangePotential(
+                density);
+
+        const double Vc =
+            correlationPotential(
+                density);
+
+        Vxc[i] =
+            Vx
+            + Vc;
     }
 
-    return Vx;
+    return Vxc;
 }
 
 // ================================================================
 // Total DFT energy
 //
-// For a closed-shell two-electron system:
+//     E = T_s
+//       + E_ext
+//       + E_H
+//       + E_x
+//       + E_c
 //
-//     E = T + V_ext + E_H + E_x
+// For the closed-shell He system:
 //
-// where:
-//
-//     T     = 2 * kinetic energy of the spatial orbital
-//     V_ext = 2 * <u|V_ext|u>
-//     E_H   = 1/2 integral rho V_H dr³
-//     E_x   = integral rho epsilon_x dr³
-//
+//     T_s = 2 T_orbital
 // ================================================================
 
 double calculateTotalEnergy(
@@ -723,12 +974,10 @@ double calculateTotalEnergy(
     double externalEnergy = 0.0;
     double hartreeEnergy = 0.0;
     double exchangeEnergy = 0.0;
+    double correlationEnergy = 0.0;
 
     // ------------------------------------------------------------
-    // Kinetic energy of ONE normalized spatial orbital
-    //
-    // T_orbital =
-    //     1/2 integral |du/dr|² dr
+    // Kinetic energy of one spatial orbital
     // ------------------------------------------------------------
 
     for (int interval = 0;
@@ -766,16 +1015,12 @@ double calculateTotalEnergy(
             * dr;
     }
 
-    // ------------------------------------------------------------
-    // The orbital is occupied by "electrons" electrons.
-    // ------------------------------------------------------------
-
     const double kineticEnergy =
         static_cast<double>(electrons)
         * orbitalKineticEnergy;
 
     // ------------------------------------------------------------
-    // External, Hartree and exchange contributions
+    // Other energy terms
     // ------------------------------------------------------------
 
     for (int i = 0;
@@ -788,7 +1033,9 @@ double calculateTotalEnergy(
         const double u2 =
             u[i] * u[i];
 
-        // Nuclear attraction.
+        // --------------------------------------------------------
+        // Nuclear attraction
+        // --------------------------------------------------------
 
         externalEnergy +=
             static_cast<double>(electrons)
@@ -796,7 +1043,11 @@ double calculateTotalEnergy(
             * Vext[i]
             * dr;
 
-        // Electron-electron Hartree energy.
+        // --------------------------------------------------------
+        // Hartree energy
+        //
+        // E_H = 1/2 integral rho V_H d³r
+        // --------------------------------------------------------
 
         hartreeEnergy +=
             0.5
@@ -805,41 +1056,51 @@ double calculateTotalEnergy(
             * VH[i]
             * dr;
 
-        // Electron density.
+        // --------------------------------------------------------
+        // Electron density
+        // --------------------------------------------------------
 
         const double density =
+            calculateDensity(
+                u[i],
+                r,
+                electrons);
+
+        // --------------------------------------------------------
+        // Exchange
+        // --------------------------------------------------------
+
+        const double epsilonX =
+            exchangeEnergyPerParticle(
+                density);
+
+        exchangeEnergy +=
             static_cast<double>(electrons)
             * u2
-            /
-            (
-                4.0
-                * PI
-                * r
-                * r
-            );
+            * epsilonX
+            * dr;
 
-        // Dirac LDA exchange.
+        // --------------------------------------------------------
+        // Correlation
+        // --------------------------------------------------------
 
-        if (density > 0.0)
-        {
-            const double epsilonX =
-                -0.75
-                * std::cbrt(3.0 / PI)
-                * std::cbrt(density);
+        const double epsilonC =
+            correlationEnergyPerParticle(
+                density);
 
-            exchangeEnergy +=
-                static_cast<double>(electrons)
-                * u2
-                * epsilonX
-                * dr;
-        }
+        correlationEnergy +=
+            static_cast<double>(electrons)
+            * u2
+            * epsilonC
+            * dr;
     }
 
     return
         kineticEnergy
         + externalEnergy
         + hartreeEnergy
-        + exchangeEnergy;
+        + exchangeEnergy
+        + correlationEnergy;
 }
 
 // ================================================================
@@ -849,7 +1110,7 @@ double calculateTotalEnergy(
 //
 //     H = -1/2 ∇² - 1/r
 //
-// No electron-electron interaction.
+// The electron-electron terms are disabled for this validation.
 // ================================================================
 
 void runHydrogen()
@@ -938,7 +1199,7 @@ void runHydrogen()
 //
 // Hartree: ON
 // Exchange: LDA Dirac
-// Correlation: OFF
+// Correlation: LDA PW92
 // ================================================================
 
 SCFResult runHelium()
@@ -1049,7 +1310,7 @@ SCFResult runHelium()
         << "Exchange:            LDA Dirac\n";
 
     std::cout
-        << "Correlation:         OFF\n";
+        << "Correlation:         LDA PW92\n";
 
     std::cout
         << "SCF mixing:          "
@@ -1068,7 +1329,7 @@ SCFResult runHelium()
             iteration;
 
         // --------------------------------------------------------
-        // Build Hartree potential
+        // Hartree potential
         // --------------------------------------------------------
 
         const std::vector<double> VH =
@@ -1078,17 +1339,21 @@ SCFResult runHelium()
                 electrons);
 
         // --------------------------------------------------------
-        // Build exchange potential
+        // Exchange-correlation potential
+        //
+        //     V_xc = V_x + V_c
         // --------------------------------------------------------
 
-        const std::vector<double> Vx =
-            calculateExchangePotential(
+        const std::vector<double> Vxc =
+            calculateExchangeCorrelationPotential(
                 u,
                 dr,
                 electrons);
 
         // --------------------------------------------------------
         // Kohn-Sham potential
+        //
+        //     V_KS = V_ext + V_H + V_xc
         // --------------------------------------------------------
 
         std::vector<double> VKs(
@@ -1102,11 +1367,11 @@ SCFResult runHelium()
             VKs[i] =
                 Vext[i]
                 + VH[i]
-                + Vx[i];
+                + Vxc[i];
         }
 
         // --------------------------------------------------------
-        // Solve KS equation
+        // Solve Kohn-Sham equation
         // --------------------------------------------------------
 
         const OrbitalResult orbital =
@@ -1191,7 +1456,7 @@ SCFResult runHelium()
             std::move(mixedU);
 
         // --------------------------------------------------------
-        // Recalculate Hartree potential from updated density
+        // Recalculate Hartree from updated density
         // --------------------------------------------------------
 
         const std::vector<double> finalVH =
@@ -1201,7 +1466,7 @@ SCFResult runHelium()
                 electrons);
 
         // --------------------------------------------------------
-        // Total energy
+        // Total DFT energy
         // --------------------------------------------------------
 
         totalEnergy =
@@ -1307,13 +1572,13 @@ int main()
         << "====================================================\n";
 
     // ------------------------------------------------------------
-    // Hydrogen
+    // Hydrogen validation
     // ------------------------------------------------------------
 
     runHydrogen();
 
     // ------------------------------------------------------------
-    // Helium
+    // Helium validation
     // ------------------------------------------------------------
 
     const SCFResult helium =
@@ -1341,20 +1606,20 @@ int main()
         << "------\n";
 
     std::cout
-        << "Configuration:       1s^2\n";
+        << "Configuration:        1s^2\n";
 
     std::cout
-        << "Orbital energy:      "
+        << "Orbital energy:       "
         << helium.orbitalEnergy
         << " Ha\n";
 
     std::cout
-        << "DFT total energy:    "
+        << "DFT total energy:     "
         << helium.totalEnergy
         << " Ha\n";
 
     std::cout
-        << "SCF iterations:      "
+        << "SCF iterations:       "
         << helium.iterations
         << "\n";
 
@@ -1362,6 +1627,10 @@ int main()
         << "Final density change: "
         << helium.densityError
         << "\n";
+
+    std::cout
+        << "\nFunctional:\n"
+        << "LDA Dirac exchange + PW92 correlation\n";
 
     std::cout
         << "\nReference:\n"
