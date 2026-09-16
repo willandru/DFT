@@ -1,438 +1,11 @@
 #include "ExchangeCorrelation.h"
 
 #include "DFTConstants.h"
+#include "PZ81.h"
 
 #include <algorithm>
-#include <cmath>
 #include <stdexcept>
-
-namespace {
-
-struct CorrelationParameters {
-    double A;
-    double B;
-    double C;
-    double D;
-    double gamma;
-    double beta1;
-    double beta2;
-};
-
-constexpr CorrelationParameters UNPOLARIZED = {
-    0.0311,
-    -0.0480,
-    0.0020,
-    -0.0116,
-    -0.1423,
-    1.0529,
-    0.3334
-};
-
-constexpr CorrelationParameters POLARIZED = {
-    0.01555,
-    -0.0269,
-    0.0007,
-    -0.0048,
-    -0.0843,
-    1.3981,
-    0.2611
-};
-
-double rsFromDensity(double density) {
-    return std::cbrt(
-        3.0 /
-        (
-            4.0 *
-            DFTConstants::PI *
-            density
-        )
-    );
-}
-
-double correlationEnergy(
-    double rs,
-    const CorrelationParameters& parameters
-) {
-    if (rs <= 0.0) {
-        throw std::invalid_argument(
-            "El parametro rs debe ser mayor que cero."
-        );
-    }
-
-    if (rs < 1.0) {
-        return
-            parameters.A * std::log(rs) +
-            parameters.B +
-            parameters.C * rs * std::log(rs) +
-            parameters.D * rs;
-    }
-
-    const double sqrtRs =
-        std::sqrt(rs);
-
-    const double denominator =
-        1.0 +
-        parameters.beta1 * sqrtRs +
-        parameters.beta2 * rs;
-
-    return
-        parameters.gamma /
-        denominator;
-}
-
-double correlationEnergyDerivativeRs(
-    double rs,
-    const CorrelationParameters& parameters
-) {
-    if (rs <= 0.0) {
-        throw std::invalid_argument(
-            "El parametro rs debe ser mayor que cero."
-        );
-    }
-
-    if (rs < 1.0) {
-        return
-            parameters.A / rs +
-            parameters.C * (std::log(rs) + 1.0) +
-            parameters.D;
-    }
-
-    const double sqrtRs =
-        std::sqrt(rs);
-
-    const double denominator =
-        1.0 +
-        parameters.beta1 * sqrtRs +
-        parameters.beta2 * rs;
-
-    const double derivativeDenominator =
-        parameters.beta1 /
-        (2.0 * sqrtRs) +
-        parameters.beta2;
-
-    return
-        -parameters.gamma *
-        derivativeDenominator /
-        (
-            denominator *
-            denominator
-        );
-}
-
-double spinInterpolation(double zeta) {
-    const double z =
-        std::clamp(
-            zeta,
-            -1.0,
-            1.0
-        );
-
-    const double numerator =
-        std::pow(
-            1.0 + z,
-            4.0 / 3.0
-        ) +
-        std::pow(
-            1.0 - z,
-            4.0 / 3.0
-        ) -
-        2.0;
-
-    const double denominator =
-        std::pow(
-            2.0,
-            4.0 / 3.0
-        ) -
-        2.0;
-
-    return numerator / denominator;
-}
-
-double spinInterpolationDerivative(
-    double zeta
-) {
-    const double z =
-        std::clamp(
-            zeta,
-            -1.0,
-            1.0
-        );
-
-    const double numerator =
-        4.0 / 3.0 *
-        (
-            std::pow(
-                1.0 + z,
-                1.0 / 3.0
-            ) -
-            std::pow(
-                1.0 - z,
-                1.0 / 3.0
-            )
-        );
-
-    const double denominator =
-        std::pow(
-            2.0,
-            4.0 / 3.0
-        ) -
-        2.0;
-
-    return numerator / denominator;
-}
-
-double exchangeEnergyPerElectron(
-    double density
-) {
-    return
-        -DFTConstants::EXCHANGE_COEFFICIENT *
-        std::cbrt(density);
-}
-
-double spinExchangeScaling(
-    double zeta
-) {
-    const double z =
-        std::clamp(
-            zeta,
-            -1.0,
-            1.0
-        );
-
-    return
-        (
-            std::pow(
-                1.0 + z,
-                4.0 / 3.0
-            ) +
-            std::pow(
-                1.0 - z,
-                4.0 / 3.0
-            )
-        ) / 2.0;
-}
-
-double spinExchangeScalingDerivative(
-    double zeta
-) {
-    const double z =
-        std::clamp(
-            zeta,
-            -1.0,
-            1.0
-        );
-
-    return
-        2.0 / 3.0 *
-        (
-            std::pow(
-                1.0 + z,
-                1.0 / 3.0
-            ) -
-            std::pow(
-                1.0 - z,
-                1.0 / 3.0
-            )
-        );
-}
-
-double exchangeEnergyPerElectronSpin(
-    double density,
-    double zeta
-) {
-    return
-        exchangeEnergyPerElectron(
-            density
-        ) *
-        spinExchangeScaling(
-            zeta
-        );
-}
-
-double spinExchangeCorrelationEnergyPerElectron(
-    double density,
-    double zeta
-) {
-    const double epsilonExchange =
-        exchangeEnergyPerElectronSpin(
-            density,
-            zeta
-        );
-
-    const double rs =
-        rsFromDensity(density);
-
-    const double epsilonCorrelation0 =
-        correlationEnergy(
-            rs,
-            UNPOLARIZED
-        );
-
-    const double epsilonCorrelation1 =
-        correlationEnergy(
-            rs,
-            POLARIZED
-        );
-
-    const double f =
-        spinInterpolation(zeta);
-
-    const double epsilonCorrelation =
-        epsilonCorrelation0 +
-        f *
-        (
-            epsilonCorrelation1 -
-            epsilonCorrelation0
-        );
-
-    return
-        epsilonExchange +
-        epsilonCorrelation;
-}
-
-double spinExchangeCorrelationPotential(
-    double density,
-    double alphaDensity,
-    double betaDensity,
-    int spin
-) {
-    if (density <= DFTConstants::RHO_FLOOR) {
-        return 0.0;
-    }
-
-    if (spin != 0 && spin != 1) {
-        throw std::invalid_argument(
-            "El canal de spin debe ser 0 (alpha) o 1 (beta)."
-        );
-    }
-
-    const double alpha =
-        std::max(
-            alphaDensity,
-            0.0
-        );
-
-    const double beta =
-        std::max(
-            betaDensity,
-            0.0
-        );
-
-    const double zeta =
-        std::clamp(
-            (alpha - beta) / density,
-            -1.0,
-            1.0
-        );
-
-    const double rs =
-        rsFromDensity(density);
-
-    const double exchange =
-        exchangeEnergyPerElectron(
-            density
-        );
-
-    const double exchangeScaling =
-        spinExchangeScaling(
-            zeta
-        );
-
-    const double exchangeScalingDerivative =
-        spinExchangeScalingDerivative(
-            zeta
-        );
-
-    const double exchangeSpin =
-        exchange *
-        exchangeScaling;
-
-    const double exchangeDerivativeRs =
-        -exchangeSpin / rs;
-
-    const double epsilonCorrelation0 =
-        correlationEnergy(
-            rs,
-            UNPOLARIZED
-        );
-
-    const double epsilonCorrelation1 =
-        correlationEnergy(
-            rs,
-            POLARIZED
-        );
-
-    const double derivativeCorrelation0 =
-        correlationEnergyDerivativeRs(
-            rs,
-            UNPOLARIZED
-        );
-
-    const double derivativeCorrelation1 =
-        correlationEnergyDerivativeRs(
-            rs,
-            POLARIZED
-        );
-
-    const double f =
-        spinInterpolation(zeta);
-
-    const double df =
-        spinInterpolationDerivative(zeta);
-
-    const double correlation =
-        epsilonCorrelation0 +
-        f *
-        (
-            epsilonCorrelation1 -
-            epsilonCorrelation0
-        );
-
-    const double correlationDerivativeRs =
-        derivativeCorrelation0 +
-        f *
-        (
-            derivativeCorrelation1 -
-            derivativeCorrelation0
-        );
-
-    const double epsilonXC =
-        exchangeSpin +
-        correlation;
-
-    const double derivativeXCrs =
-        exchangeDerivativeRs +
-        correlationDerivativeRs;
-
-    const double epsilonXCzeta =
-        exchange *
-        exchangeScalingDerivative +
-        df *
-        (
-            epsilonCorrelation1 -
-            epsilonCorrelation0
-        );
-
-    const double radialContribution =
-        epsilonXC -
-        rs *
-        derivativeXCrs /
-        3.0;
-
-    if (spin == 0) {
-        return
-            radialContribution +
-            (1.0 - zeta) *
-            epsilonXCzeta;
-    }
-
-    return
-        radialContribution -
-        (1.0 + zeta) *
-        epsilonXCzeta;
-}
-
-}
+#include <vector>
 
 std::vector<double> calculateSpinExchangeCorrelationPotential(
     const std::vector<double>& alphaDensity,
@@ -451,6 +24,8 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
         );
     }
 
+    PZ81 functional;
+
     std::vector<double> potential(
         alphaDensity.size(),
         0.0
@@ -460,17 +35,19 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
          i < alphaDensity.size();
          ++i) {
 
-        const double density =
-            alphaDensity[i] +
-            betaDensity[i];
-
-        potential[i] =
-            spinExchangeCorrelationPotential(
-                density,
+        const XCResult result =
+            functional.evaluate(
                 alphaDensity[i],
-                betaDensity[i],
-                spin
+                betaDensity[i]
             );
+
+        if (spin == 0) {
+            potential[i] =
+                result.potentialAlpha;
+        } else {
+            potential[i] =
+                result.potentialBeta;
+        }
     }
 
     return potential;
@@ -504,6 +81,8 @@ double calculateSpinExchangeCorrelationEnergy(
         );
     }
 
+    PZ81 functional;
+
     double energy = 0.0;
 
     for (std::size_t i = 0;
@@ -517,21 +96,15 @@ double calculateSpinExchangeCorrelationEnergy(
         double epsilonXC = 0.0;
 
         if (density > DFTConstants::RHO_FLOOR) {
-            const double zeta =
-                std::clamp(
-                    (
-                        alphaDensity[i] -
-                        betaDensity[i]
-                    ) / density,
-                    -1.0,
-                    1.0
+
+            const XCResult result =
+                functional.evaluate(
+                    alphaDensity[i],
+                    betaDensity[i]
                 );
 
             epsilonXC =
-                spinExchangeCorrelationEnergyPerElectron(
-                    density,
-                    zeta
-                );
+                result.energyPerElectron;
         }
 
         const double integrand =
@@ -547,7 +120,9 @@ double calculateSpinExchangeCorrelationEnergy(
 
             energy +=
                 0.5 * integrand;
+
         } else {
+
             energy += integrand;
         }
     }
