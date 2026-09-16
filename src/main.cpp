@@ -2,6 +2,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -12,12 +13,35 @@
 constexpr double PI =
     3.1415926535897932384626433832795;
 
+constexpr double MIN_DENSITY =
+    1.0e-14;
+
+constexpr double MIN_PIVOT =
+    1.0e-14;
+
 // ================================================================
-// PW92 LDA correlation parameters
+// PBE constants
 //
-// Unpolarized electron gas.
+// Perdew, Burke and Ernzerhof.
+// Phys. Rev. Lett. 77, 3865 (1996).
 //
-// Perdew-Wang 1992 parameterization.
+// Atomic units.
+// ================================================================
+
+constexpr double PBE_MU =
+    0.2195149727645171;
+
+constexpr double PBE_KAPPA =
+    0.8040;
+
+constexpr double PBE_BETA =
+    0.06672455060314922;
+
+constexpr double PBE_GAMMA =
+    0.031090690869654895;
+
+// ================================================================
+// PW92 correlation constants
 // ================================================================
 
 constexpr double PW92_A =
@@ -39,16 +63,13 @@ constexpr double PW92_BETA4 =
     0.49294;
 
 // ================================================================
-// Radial coordinate
+// Radial grid
 //
-// Physical grid:
+// r_i = (i + 1) dr
 //
-//     r_i = (i + 1) dr
+// u(0) = u(Rmax) = 0
 //
-// Boundary conditions:
-//
-//     u(0)    = 0
-//     u(Rmax) = 0
+// Rmax = (N + 1) dr
 // ================================================================
 
 double radiusAt(
@@ -77,48 +98,7 @@ struct SCFResult
 };
 
 // ================================================================
-// Normalize radial orbital
-//
-//     integral |u(r)|² dr = 1
-// ================================================================
-
-void normalize(
-    std::vector<double>& u,
-    double dr)
-{
-    if (u.empty())
-    {
-        throw std::runtime_error(
-            "Cannot normalize empty orbital.");
-    }
-
-    if (dr <= 0.0)
-    {
-        throw std::runtime_error(
-            "Grid spacing must be positive.");
-    }
-
-    double norm = 0.0;
-
-    for (double value : u)
-        norm += value * value * dr;
-
-    norm = std::sqrt(norm);
-
-    if (!std::isfinite(norm) || norm <= 0.0)
-    {
-        throw std::runtime_error(
-            "Cannot normalize zero or invalid orbital.");
-    }
-
-    for (double& value : u)
-        value /= norm;
-}
-
-// ================================================================
 // Tridiagonal solver
-//
-// Thomas algorithm.
 // ================================================================
 
 std::vector<double> solveTridiagonal(
@@ -127,142 +107,162 @@ std::vector<double> solveTridiagonal(
     const std::vector<double>& upper,
     const std::vector<double>& rhs)
 {
-    const int N =
+    const int n =
         static_cast<int>(diagonal.size());
 
-    if (N == 0)
+    if (n == 0)
+        throw std::runtime_error(
+            "Tridiagonal system has zero size.");
+
+    if (static_cast<int>(lower.size()) != n - 1 ||
+        static_cast<int>(upper.size()) != n - 1 ||
+        static_cast<int>(rhs.size()) != n)
     {
         throw std::runtime_error(
-            "Cannot solve empty tridiagonal system.");
+            "Invalid tridiagonal system dimensions.");
     }
 
-    if (
-        static_cast<int>(lower.size()) != N ||
-        static_cast<int>(upper.size()) != N ||
-        static_cast<int>(rhs.size()) != N)
-    {
-        throw std::runtime_error(
-            "Invalid tridiagonal matrix dimensions.");
-    }
-
-    std::vector<double> a = lower;
-    std::vector<double> b = diagonal;
-    std::vector<double> c = upper;
-    std::vector<double> d = rhs;
-
-    constexpr double MIN_PIVOT =
-        1.0e-14;
-
-    // ------------------------------------------------------------
-    // Forward elimination
-    // ------------------------------------------------------------
-
-    for (int i = 1;
-         i < N;
-         ++i)
-    {
-        if (!std::isfinite(b[i - 1]))
-        {
-            throw std::runtime_error(
-                "Non-finite pivot encountered.");
-        }
-
-        if (std::abs(b[i - 1]) < MIN_PIVOT)
-        {
-            throw std::runtime_error(
-                "Singular or ill-conditioned tridiagonal system.");
-        }
-
-        const double multiplier =
-            a[i] / b[i - 1];
-
-        b[i] -=
-            multiplier * c[i - 1];
-
-        d[i] -=
-            multiplier * d[i - 1];
-    }
-
-    if (!std::isfinite(b[N - 1]))
-    {
-        throw std::runtime_error(
-            "Non-finite final pivot encountered.");
-    }
-
-    if (std::abs(b[N - 1]) < MIN_PIVOT)
-    {
-        throw std::runtime_error(
-            "Singular or ill-conditioned tridiagonal system.");
-    }
-
-    // ------------------------------------------------------------
-    // Back substitution
-    // ------------------------------------------------------------
-
-    std::vector<double> x(
-        N,
+    std::vector<double> cPrime(
+        n - 1,
         0.0);
 
-    x[N - 1] =
-        d[N - 1] / b[N - 1];
+    std::vector<double> dPrime(
+        n,
+        0.0);
 
-    for (int i = N - 2;
+    std::vector<double> solution(
+        n,
+        0.0);
+
+    double pivot =
+        diagonal[0];
+
+    if (std::abs(pivot) < MIN_PIVOT)
+        throw std::runtime_error(
+            "Numerically singular tridiagonal system.");
+
+    if (n > 1)
+    {
+        cPrime[0] =
+            upper[0] /
+            pivot;
+    }
+
+    dPrime[0] =
+        rhs[0] /
+        pivot;
+
+    for (int i = 1;
+         i < n;
+         ++i)
+    {
+        pivot =
+            diagonal[i] -
+            lower[i - 1] *
+            cPrime[i - 1];
+
+        if (std::abs(pivot) < MIN_PIVOT)
+            throw std::runtime_error(
+                "Numerically singular tridiagonal system.");
+
+        if (i < n - 1)
+        {
+            cPrime[i] =
+                upper[i] /
+                pivot;
+        }
+
+        dPrime[i] =
+            (
+                rhs[i] -
+                lower[i - 1] *
+                dPrime[i - 1]
+            ) /
+            pivot;
+    }
+
+    solution[n - 1] =
+        dPrime[n - 1];
+
+    for (int i = n - 2;
          i >= 0;
          --i)
     {
-        if (std::abs(b[i]) < MIN_PIVOT)
-        {
-            throw std::runtime_error(
-                "Singular or ill-conditioned tridiagonal system.");
-        }
-
-        x[i] =
-            (
-                d[i]
-                - c[i] * x[i + 1]
-            )
-            / b[i];
+        solution[i] =
+            dPrime[i] -
+            cPrime[i] *
+            solution[i + 1];
     }
 
-    return x;
+    return solution;
+}
+
+// ================================================================
+// Normalize radial orbital
+//
+// integral |u|² dr = 1
+// ================================================================
+
+void normalize(
+    std::vector<double>& u,
+    double dr)
+{
+    double norm2 =
+        0.0;
+
+    for (double value : u)
+    {
+        norm2 +=
+            value *
+            value *
+            dr;
+    }
+
+    if (norm2 <= 0.0)
+        throw std::runtime_error(
+            "Cannot normalize zero orbital.");
+
+    const double inverseNorm =
+        1.0 /
+        std::sqrt(norm2);
+
+    for (double& value : u)
+    {
+        value *=
+            inverseNorm;
+    }
 }
 
 // ================================================================
 // Apply radial Hamiltonian
 //
-//     H = -1/2 d²/dr² + V(r)
+// H = -1/2 d²/dr² + V(r)
 //
-// for l = 0.
+// l = 0
 // ================================================================
 
-void applyHamiltonian(
+std::vector<double> applyHamiltonian(
     const std::vector<double>& u,
     const std::vector<double>& potential,
-    std::vector<double>& Hu,
     double dr)
 {
-    const int N =
+    const int n =
         static_cast<int>(u.size());
 
-    if (
-        static_cast<int>(potential.size()) != N ||
-        static_cast<int>(Hu.size()) != N)
-    {
+    if (static_cast<int>(potential.size()) != n)
         throw std::runtime_error(
-            "Hamiltonian vector dimensions do not match.");
-    }
-
-    if (N == 0 || dr <= 0.0)
-    {
-        throw std::runtime_error(
-            "Invalid radial grid.");
-    }
+            "Hamiltonian vector size mismatch.");
 
     const double inverseDr2 =
-        1.0 / (dr * dr);
+        1.0 /
+        (dr * dr);
+
+    std::vector<double> result(
+        n,
+        0.0);
 
     for (int i = 0;
-         i < N;
+         i < n;
          ++i)
     {
         const double left =
@@ -270,92 +270,120 @@ void applyHamiltonian(
             ? u[i - 1]
             : 0.0;
 
+        const double center =
+            u[i];
+
         const double right =
-            (i + 1 < N)
+            (i + 1 < n)
             ? u[i + 1]
             : 0.0;
 
         const double secondDerivative =
             (
+                left -
+                2.0 * center +
                 right
-                - 2.0 * u[i]
-                + left
-            )
-            * inverseDr2;
+            ) *
+            inverseDr2;
 
-        Hu[i] =
-            -0.5 * secondDerivative
-            + potential[i] * u[i];
+        result[i] =
+            -0.5 *
+            secondDerivative +
+            potential[i] *
+            center;
     }
+
+    return result;
 }
 
 // ================================================================
-// Solve lowest eigenstate
-//
-// 1. Tridiagonal Hamiltonian.
-// 2. Sturm count.
-// 3. Bisection for lowest eigenvalue.
-// 4. Inverse iteration for eigenvector.
+// Rayleigh quotient
 // ================================================================
 
-OrbitalResult solveGroundState(
+double calculateRayleighQuotient(
+    const std::vector<double>& u,
     const std::vector<double>& potential,
     double dr)
 {
-    const int N =
-        static_cast<int>(potential.size());
+    const std::vector<double> Hu =
+        applyHamiltonian(
+            u,
+            potential,
+            dr);
 
-    if (N < 2)
-    {
-        throw std::runtime_error(
-            "Ground-state solver requires at least two grid points.");
-    }
+    double numerator =
+        0.0;
 
-    if (dr <= 0.0)
-    {
-        throw std::runtime_error(
-            "Grid spacing must be positive.");
-    }
+    double denominator =
+        0.0;
 
-    // ------------------------------------------------------------
-    // Construct tridiagonal Hamiltonian
-    // ------------------------------------------------------------
-
-    const double diagonalKinetic =
-        1.0 / (dr * dr);
-
-    const double offDiagonal =
-        -0.5 / (dr * dr);
-
-    std::vector<double> diagonal(
-        N,
-        0.0);
-
-    for (int i = 0;
-         i < N;
+    for (std::size_t i = 0;
+         i < u.size();
          ++i)
     {
-        diagonal[i] =
-            diagonalKinetic
-            + potential[i];
+        numerator +=
+            u[i] *
+            Hu[i] *
+            dr;
+
+        denominator +=
+            u[i] *
+            u[i] *
+            dr;
     }
 
-    // ------------------------------------------------------------
-    // Sturm count
-    //
-    // Returns number of eigenvalues strictly below energy.
-    // ------------------------------------------------------------
+    if (denominator <= 0.0)
+        throw std::runtime_error(
+            "Invalid Rayleigh quotient denominator.");
 
-    auto countBelow =
-        [&](double energy)
+    return
+        numerator /
+        denominator;
+}
+
+// ================================================================
+// Sturm count
+// ================================================================
+
+int countEigenvaluesBelow(
+    const std::vector<double>& diagonal,
+    double offDiagonal,
+    double energy)
+{
+    const int n =
+        static_cast<int>(
+            diagonal.size());
+
+    int count =
+        0;
+
+    double q =
+        diagonal[0] -
+        energy;
+
+    if (q < 0.0)
+        ++count;
+
+    if (std::abs(q) < MIN_PIVOT)
     {
-        int count = 0;
+        q =
+            (q < 0.0)
+            ? -MIN_PIVOT
+            : MIN_PIVOT;
+    }
 
-        constexpr double MIN_PIVOT =
-            1.0e-14;
-
-        double q =
-            diagonal[0] - energy;
+    for (int i = 1;
+         i < n;
+         ++i)
+    {
+        q =
+            diagonal[i] -
+            energy -
+            (
+                offDiagonal *
+                offDiagonal
+            ) /
+            q;
 
         if (q < 0.0)
             ++count;
@@ -363,976 +391,1526 @@ OrbitalResult solveGroundState(
         if (std::abs(q) < MIN_PIVOT)
         {
             q =
-                q < 0.0
+                (q < 0.0)
                 ? -MIN_PIVOT
                 : MIN_PIVOT;
         }
-
-        const double off2 =
-            offDiagonal * offDiagonal;
-
-        for (int i = 1;
-             i < N;
-             ++i)
-        {
-            q =
-                diagonal[i]
-                - energy
-                - off2 / q;
-
-            if (q < 0.0)
-                ++count;
-
-            if (std::abs(q) < MIN_PIVOT)
-            {
-                q =
-                    q < 0.0
-                    ? -MIN_PIVOT
-                    : MIN_PIVOT;
-            }
-        }
-
-        return count;
-    };
-
-    // ------------------------------------------------------------
-    // Energy bracket
-    // ------------------------------------------------------------
-
-    double lowerEnergy = -100.0;
-    double upperEnergy = 10.0;
-
-    while (countBelow(lowerEnergy) >= 1)
-    {
-        lowerEnergy *= 2.0;
-
-        if (!std::isfinite(lowerEnergy))
-        {
-            throw std::runtime_error(
-                "Unable to bracket lowest eigenvalue.");
-        }
     }
 
-    while (countBelow(upperEnergy) < 1)
-    {
-        upperEnergy *= 2.0;
+    return count;
+}
 
-        if (!std::isfinite(upperEnergy))
-        {
-            throw std::runtime_error(
-                "Unable to bracket lowest eigenvalue.");
-        }
+// ================================================================
+// Ground-state radial solver
+// ================================================================
+
+OrbitalResult solveGroundState(
+    const std::vector<double>& potential,
+    double dr,
+    const std::vector<double>& initialGuess)
+{
+    const int n =
+        static_cast<int>(
+            potential.size());
+
+    if (n == 0)
+        throw std::runtime_error(
+            "Empty potential.");
+
+    if (static_cast<int>(
+            initialGuess.size()) != n)
+    {
+        throw std::runtime_error(
+            "Initial orbital size mismatch.");
+    }
+
+    const double inverseDr2 =
+        1.0 /
+        (dr * dr);
+
+    const double diagonalKinetic =
+        inverseDr2;
+
+    const double offDiagonal =
+        -0.5 *
+        inverseDr2;
+
+    std::vector<double> diagonal(
+        n);
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        diagonal[i] =
+            diagonalKinetic +
+            potential[i];
     }
 
     // ------------------------------------------------------------
-    // Bisection
+    // Eigenvalue bracket.
     // ------------------------------------------------------------
 
-    constexpr int MAX_BISECTION =
-        120;
+    double lower =
+        -100.0;
 
-    constexpr double ENERGY_TOLERANCE =
-        1.0e-12;
+    double upper =
+        10.0;
 
-    double energy = 0.0;
+    while (
+        countEigenvaluesBelow(
+            diagonal,
+            offDiagonal,
+            lower) > 0)
+    {
+        lower *=
+            2.0;
+
+        if (lower < -1.0e8)
+            throw std::runtime_error(
+                "Unable to bracket lower eigenvalue.");
+    }
+
+    while (
+        countEigenvaluesBelow(
+            diagonal,
+            offDiagonal,
+            upper) < 1)
+    {
+        upper *=
+            2.0;
+
+        if (upper > 1.0e8)
+            throw std::runtime_error(
+                "Unable to bracket ground-state eigenvalue.");
+    }
+
+    // ------------------------------------------------------------
+    // Bisection.
+    // ------------------------------------------------------------
+
+    double energy =
+        0.0;
 
     for (int iteration = 0;
-         iteration < MAX_BISECTION;
+         iteration < 160;
          ++iteration)
     {
         const double middle =
             0.5 *
-            (
-                lowerEnergy
-                + upperEnergy
-            );
+            (lower + upper);
 
-        if (countBelow(middle) < 1)
-            lowerEnergy = middle;
+        const int count =
+            countEigenvaluesBelow(
+                diagonal,
+                offDiagonal,
+                middle);
+
+        if (count >= 1)
+            upper =
+                middle;
         else
-            upperEnergy = middle;
+            lower =
+                middle;
 
         energy =
             0.5 *
-            (
-                lowerEnergy
-                + upperEnergy
-            );
+            (lower + upper);
 
-        if (
-            upperEnergy
-            - lowerEnergy
-            < ENERGY_TOLERANCE
-        )
+        if (std::abs(
+                upper - lower) <
+            1.0e-13)
         {
             break;
         }
     }
 
     // ------------------------------------------------------------
-    // Initial orbital
-    //
-    // Hydrogen-like 1s radial form.
+    // Initial orbital.
     // ------------------------------------------------------------
 
-    std::vector<double> u(
-        N,
-        0.0);
-
-    for (int i = 0;
-         i < N;
-         ++i)
-    {
-        const double r =
-            radiusAt(i, dr);
-
-        u[i] =
-            r
-            * std::exp(-r);
-    }
+    std::vector<double> orbital =
+        initialGuess;
 
     normalize(
-        u,
+        orbital,
         dr);
 
     // ------------------------------------------------------------
-    // Inverse iteration
+    // Inverse iteration.
     // ------------------------------------------------------------
 
     const double sigma =
-        energy - 0.05;
+        energy -
+        0.05;
 
-    constexpr int MAX_INVERSE_ITERATIONS =
-        40;
+    std::vector<double> lowerDiagonal(
+        n - 1,
+        offDiagonal);
 
-    constexpr double ORBITAL_TOLERANCE =
-        1.0e-12;
+    std::vector<double> upperDiagonal(
+        n - 1,
+        offDiagonal);
+
+    std::vector<double> shiftedDiagonal(
+        n);
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        shiftedDiagonal[i] =
+            diagonal[i] -
+            sigma;
+    }
 
     for (int iteration = 0;
-         iteration < MAX_INVERSE_ITERATIONS;
+         iteration < 80;
          ++iteration)
     {
-        std::vector<double> lower(
-            N,
-            offDiagonal);
-
-        std::vector<double> upper(
-            N,
-            offDiagonal);
-
-        std::vector<double> shiftedDiagonal(
-            N,
-            0.0);
-
-        lower[0] = 0.0;
-        upper[N - 1] = 0.0;
-
-        for (int i = 0;
-             i < N;
-             ++i)
-        {
-            shiftedDiagonal[i] =
-                diagonal[i]
-                - sigma;
-        }
-
-        const std::vector<double> next =
+        std::vector<double> next =
             solveTridiagonal(
-                lower,
+                lowerDiagonal,
                 shiftedDiagonal,
-                upper,
-                u);
-
-        std::vector<double> normalized =
-            next;
+                upperDiagonal,
+                orbital);
 
         normalize(
-            normalized,
+            next,
             dr);
 
-        // --------------------------------------------------------
-        // Fix global sign
-        // --------------------------------------------------------
-
-        double overlap = 0.0;
+        double overlap =
+            0.0;
 
         for (int i = 0;
-             i < N;
+             i < n;
              ++i)
         {
             overlap +=
-                u[i]
-                * normalized[i]
-                * dr;
+                next[i] *
+                orbital[i] *
+                dr;
         }
 
         if (overlap < 0.0)
         {
-            for (double& value : normalized)
-                value *= -1.0;
+            for (double& value : next)
+            {
+                value =
+                    -value;
+            }
         }
 
-        // --------------------------------------------------------
-        // Orbital convergence
-        // --------------------------------------------------------
-
-        double difference = 0.0;
+        double difference2 =
+            0.0;
 
         for (int i = 0;
-             i < N;
+             i < n;
              ++i)
         {
-            const double delta =
-                normalized[i]
-                - u[i];
+            const double difference =
+                next[i] -
+                orbital[i];
 
-            difference +=
-                delta
-                * delta
-                * dr;
+            difference2 +=
+                difference *
+                difference *
+                dr;
         }
 
-        u =
-            std::move(normalized);
+        orbital.swap(next);
 
-        if (
-            std::sqrt(difference)
-            < ORBITAL_TOLERANCE
-        )
+        if (std::sqrt(
+                difference2) <
+            1.0e-12)
         {
             break;
         }
     }
 
-    // ------------------------------------------------------------
-    // Rayleigh quotient
-    // ------------------------------------------------------------
-
-    std::vector<double> Hu(
-        N,
-        0.0);
-
-    applyHamiltonian(
-        u,
-        potential,
-        Hu,
+    normalize(
+        orbital,
         dr);
 
-    double eigenvalue = 0.0;
-
-    for (int i = 0;
-         i < N;
-         ++i)
-    {
-        eigenvalue +=
-            u[i]
-            * Hu[i]
-            * dr;
-    }
-
-    if (!std::isfinite(eigenvalue))
-    {
-        throw std::runtime_error(
-            "Ground-state eigenvalue is not finite.");
-    }
+    const double finalEnergy =
+        calculateRayleighQuotient(
+            orbital,
+            potential,
+            dr);
 
     return
     {
-        std::move(u),
-        eigenvalue
+        orbital,
+        finalEnergy
     };
+}
+
+// ================================================================
+// Electron density
+//
+// rho(r) = N |u(r)|² / (4 pi r²)
+// ================================================================
+
+std::vector<double> calculateDensity(
+    const std::vector<double>& u,
+    double dr,
+    double electronCount)
+{
+    const int n =
+        static_cast<int>(
+            u.size());
+
+    std::vector<double> density(
+        n,
+        0.0);
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        const double r =
+            radiusAt(
+                i,
+                dr);
+
+        density[i] =
+            electronCount *
+            u[i] *
+            u[i] /
+            (
+                4.0 *
+                PI *
+                r *
+                r
+            );
+    }
+
+    return density;
+}
+
+// ================================================================
+// Density derivatives
+// ================================================================
+
+struct DensityDerivatives
+{
+    std::vector<double> first;
+    std::vector<double> second;
+};
+
+DensityDerivatives calculateDensityDerivatives(
+    const std::vector<double>& density,
+    double dr)
+{
+    const int n =
+        static_cast<int>(
+            density.size());
+
+    if (n < 4)
+        throw std::runtime_error(
+            "At least four density points are required.");
+
+    DensityDerivatives result;
+
+    result.first.assign(
+        n,
+        0.0);
+
+    result.second.assign(
+        n,
+        0.0);
+
+    const double inverse2Dr =
+        1.0 /
+        (2.0 * dr);
+
+    const double inverseDr2 =
+        1.0 /
+        (dr * dr);
+
+    // ------------------------------------------------------------
+    // First derivative.
+    // ------------------------------------------------------------
+
+    result.first[0] =
+        (
+            -3.0 * density[0] +
+            4.0 * density[1] -
+            density[2]
+        ) *
+        inverse2Dr;
+
+    for (int i = 1;
+         i < n - 1;
+         ++i)
+    {
+        result.first[i] =
+            (
+                density[i + 1] -
+                density[i - 1]
+            ) *
+            inverse2Dr;
+    }
+
+    result.first[n - 1] =
+        (
+            3.0 * density[n - 1] -
+            4.0 * density[n - 2] +
+            density[n - 3]
+        ) *
+        inverse2Dr;
+
+    // ------------------------------------------------------------
+    // Second derivative.
+    // ------------------------------------------------------------
+
+    result.second[0] =
+        (
+            density[0] -
+            2.0 * density[1] +
+            density[2]
+        ) *
+        inverseDr2;
+
+    for (int i = 1;
+         i < n - 1;
+         ++i)
+    {
+        result.second[i] =
+            (
+                density[i + 1] -
+                2.0 * density[i] +
+                density[i - 1]
+            ) *
+            inverseDr2;
+    }
+
+    result.second[n - 1] =
+        (
+            density[n - 1] -
+            2.0 * density[n - 2] +
+            density[n - 3]
+        ) *
+        inverseDr2;
+
+    return result;
 }
 
 // ================================================================
 // Hartree potential
 //
-// rho(r) = Ne |u(r)|² / (4 pi r²)
-//
-// V_H(r) = Ne [
-//
+// VH(r) = N [
 //     1/r integral_0^r |u(r')|² dr'
-//
 //     +
-//
-//     integral_r^Rmax |u(r')|²/r' dr'
-//
+//     integral_r^inf |u(r')|²/r' dr'
 // ]
 // ================================================================
 
 std::vector<double> calculateHartreePotential(
     const std::vector<double>& u,
     double dr,
-    int electrons)
+    double electronCount)
 {
-    const int N =
-        static_cast<int>(u.size());
-
-    if (N == 0)
-    {
-        throw std::runtime_error(
-            "Cannot calculate Hartree potential for empty orbital.");
-    }
-
-    if (dr <= 0.0)
-    {
-        throw std::runtime_error(
-            "Grid spacing must be positive.");
-    }
-
-    if (electrons <= 0)
-    {
-        throw std::runtime_error(
-            "Electron count must be positive.");
-    }
+    const int n =
+        static_cast<int>(
+            u.size());
 
     std::vector<double> cumulative(
-        N,
+        n,
         0.0);
 
     std::vector<double> outer(
-        N,
+        n,
         0.0);
 
-    std::vector<double> VH(
-        N,
+    std::vector<double> potential(
+        n,
         0.0);
-
-    // ------------------------------------------------------------
-    // Integral from 0 to r
-    // ------------------------------------------------------------
 
     cumulative[0] =
-        0.5
-        * dr
-        * u[0]
-        * u[0];
+        0.5 *
+        dr *
+        u[0] *
+        u[0];
 
     for (int i = 1;
-         i < N;
+         i < n;
          ++i)
     {
         cumulative[i] =
-            cumulative[i - 1]
-            +
-            0.5
-            * dr
-            *
+            cumulative[i - 1] +
+            0.5 *
+            dr *
             (
-                u[i - 1] * u[i - 1]
-                +
-                u[i] * u[i]
+                u[i - 1] *
+                u[i - 1] +
+                u[i] *
+                u[i]
             );
     }
 
-    // ------------------------------------------------------------
-    // Integral from r to Rmax
-    // ------------------------------------------------------------
+    outer[n - 1] =
+        0.5 *
+        dr *
+        u[n - 1] *
+        u[n - 1] /
+        radiusAt(
+            n - 1,
+            dr);
 
-    outer[N - 1] =
-        0.5
-        * dr
-        *
-        (
-            u[N - 1]
-            * u[N - 1]
-            /
-            radiusAt(
-                N - 1,
-                dr)
-        );
-
-    for (int i = N - 2;
+    for (int i = n - 2;
          i >= 0;
          --i)
     {
         const double r1 =
-            radiusAt(i, dr);
+            radiusAt(
+                i,
+                dr);
 
         const double r2 =
-            radiusAt(i + 1, dr);
-
-        const double f1 =
-            u[i]
-            * u[i]
-            / r1;
-
-        const double f2 =
-            u[i + 1]
-            * u[i + 1]
-            / r2;
+            radiusAt(
+                i + 1,
+                dr);
 
         outer[i] =
-            outer[i + 1]
-            +
-            0.5
-            * dr
-            * (f1 + f2);
+            outer[i + 1] +
+            0.5 *
+            dr *
+            (
+                u[i] *
+                u[i] /
+                r1
+                +
+                u[i + 1] *
+                u[i + 1] /
+                r2
+            );
     }
 
-    // ------------------------------------------------------------
-    // Hartree potential
-    // ------------------------------------------------------------
-
     for (int i = 0;
-         i < N;
+         i < n;
          ++i)
     {
         const double r =
-            radiusAt(i, dr);
+            radiusAt(
+                i,
+                dr);
 
-        VH[i] =
-            static_cast<double>(electrons)
-            *
+        potential[i] =
+            electronCount *
             (
-                cumulative[i] / r
+                cumulative[i] /
+                r
                 +
                 outer[i]
             );
     }
 
-    return VH;
+    return potential;
 }
 
 // ================================================================
-// Electron density
-//
-// rho(r) = Ne |u(r)|² / (4 pi r²)
+// PW92 correlation
 // ================================================================
 
-double calculateDensity(
-    double u,
-    double r,
-    int electrons)
+struct PW92Correlation
 {
-    if (r <= 0.0)
+    double epsilon;
+    double derivativeRs;
+};
+
+PW92Correlation calculatePW92Correlation(
+    double rs)
+{
+    if (rs <= 0.0)
         throw std::runtime_error(
-            "Radial coordinate must be positive.");
-
-    return
-        static_cast<double>(electrons)
-        * u
-        * u
-        /
-        (
-            4.0
-            * PI
-            * r
-            * r
-        );
-}
-
-// ================================================================
-// LDA Dirac exchange energy per electron
-//
-// epsilon_x(rho)
-//     = -3/4 (3/pi)^(1/3) rho^(1/3)
-// ================================================================
-
-double exchangeEnergyPerParticle(
-    double density)
-{
-    if (density <= 0.0)
-        return 0.0;
-
-    return
-        -0.75
-        * std::cbrt(3.0 / PI)
-        * std::cbrt(density);
-}
-
-// ================================================================
-// LDA Dirac exchange potential
-//
-// v_x(rho)
-//     = -(3/pi)^(1/3) rho^(1/3)
-// ================================================================
-
-double exchangePotential(
-    double density)
-{
-    if (density <= 0.0)
-        return 0.0;
-
-    return
-        -std::cbrt(3.0 / PI)
-        * std::cbrt(density);
-}
-
-// ================================================================
-// PW92 correlation energy per particle
-//
-// r_s = (3 / (4 pi rho))^(1/3)
-//
-// epsilon_c(r_s) =
-//
-// -2 A (1 + alpha1 r_s)
-//
-// ln(
-//     1 +
-//     1 /
-//     [2 A (beta1 sqrt(r_s)
-//          + beta2 r_s
-//          + beta3 r_s^(3/2)
-//          + beta4 r_s²)]
-// )
-// ================================================================
-
-double correlationEnergyPerParticle(
-    double density)
-{
-    if (density <= 0.0)
-        return 0.0;
-
-    const double rs =
-        std::cbrt(
-            3.0
-            /
-            (
-                4.0
-                * PI
-                * density
-            )
-        );
+            "Invalid rs in PW92.");
 
     const double sqrtRs =
         std::sqrt(rs);
 
-    const double rs32 =
-        rs * sqrtRs;
-
-    const double rs2 =
-        rs * rs;
-
-    const double denominator =
-        2.0
-        * PW92_A
-        *
+    const double q0 =
+        -2.0 *
+        PW92_A *
         (
-            PW92_BETA1 * sqrtRs
-            +
-            PW92_BETA2 * rs
-            +
-            PW92_BETA3 * rs32
-            +
-            PW92_BETA4 * rs2
+            1.0 +
+            PW92_ALPHA1 *
+            rs
         );
 
-    const double logarithm =
-        std::log(
-            1.0
-            + 1.0 / denominator
-        );
-
-    return
-        -2.0
-        * PW92_A
-        *
+    const double q1 =
+        2.0 *
+        PW92_A *
+        sqrtRs *
         (
-            1.0
-            + PW92_ALPHA1 * rs
-        )
-        * logarithm;
-}
-
-// ================================================================
-// PW92 correlation potential
-//
-// v_c(rho)
-//     = epsilon_c
-//       - (r_s / 3) d epsilon_c / d r_s
-//
-// The derivative is analytical.
-// ================================================================
-
-double correlationPotential(
-    double density)
-{
-    if (density <= 0.0)
-        return 0.0;
-
-    const double rs =
-        std::cbrt(
-            3.0
-            /
+            PW92_BETA1 +
+            sqrtRs *
             (
-                4.0
-                * PI
-                * density
+                PW92_BETA2 +
+                sqrtRs *
+                (
+                    PW92_BETA3 +
+                    PW92_BETA4 *
+                    sqrtRs
+                )
             )
         );
 
-    const double sqrtRs =
-        std::sqrt(rs);
+    const double q2 =
+        std::log1p(
+            1.0 / q1);
 
-    const double rs32 =
-        rs * sqrtRs;
+    const double epsilon =
+        q0 *
+        q2;
 
-    const double rs2 =
-        rs * rs;
+    const double q3 =
+        PW92_A *
+        (
+            PW92_BETA1 /
+            sqrtRs
+            +
+            2.0 *
+            PW92_BETA2
+            +
+            sqrtRs *
+            (
+                3.0 *
+                PW92_BETA3
+                +
+                4.0 *
+                PW92_BETA4 *
+                sqrtRs
+            )
+        );
 
-    const double denominatorCore =
-        PW92_BETA1 * sqrtRs
-        +
-        PW92_BETA2 * rs
-        +
-        PW92_BETA3 * rs32
-        +
-        PW92_BETA4 * rs2;
+    const double derivative =
+        -2.0 *
+        PW92_A *
+        PW92_ALPHA1 *
+        q2
+        -
+        q0 *
+        q3 /
+        (
+            q1 *
+            (1.0 + q1)
+        );
+
+    return
+    {
+        epsilon,
+        derivative
+    };
+}
+
+// ================================================================
+// PBE exchange
+//
+// epsilon_x^PBE = epsilon_x^LDA F_x(s)
+//
+// s = |grad rho| / (2 kF rho)
+//
+// F_x(s) = 1 + kappa
+//          - kappa / (1 + mu s²/kappa)
+// ================================================================
+
+double calculatePBEExchangeEnergyPerElectron(
+    double rho,
+    double gradientMagnitude)
+{
+    if (rho <= MIN_DENSITY)
+        return 0.0;
+
+    const double kF =
+        std::pow(
+            3.0 *
+            PI *
+            PI *
+            rho,
+            1.0 / 3.0);
+
+    const double s =
+        gradientMagnitude /
+        (
+            2.0 *
+            kF *
+            rho
+        );
+
+    const double s2 =
+        s * s;
 
     const double denominator =
-        2.0
-        * PW92_A
-        * denominatorCore;
+        1.0 +
+        PBE_MU *
+        s2 /
+        PBE_KAPPA;
 
-    const double logarithm =
-        std::log(
-            1.0
-            + 1.0 / denominator
-        );
+    const double enhancement =
+        1.0 +
+        PBE_KAPPA -
+        PBE_KAPPA /
+        denominator;
+
+    const double ldaExchange =
+        -0.75 *
+        std::pow(
+            3.0 / PI,
+            1.0 / 3.0) *
+        std::pow(
+            rho,
+            1.0 / 3.0);
+
+    return
+        ldaExchange *
+        enhancement;
+}
+
+// ================================================================
+// PBE correlation
+// ================================================================
+
+double calculatePBECorrelationEnergyPerElectron(
+    double rho,
+    double gradientMagnitude)
+{
+    if (rho <= MIN_DENSITY)
+        return 0.0;
+
+    const double rs =
+        std::pow(
+            3.0 /
+            (
+                4.0 *
+                PI *
+                rho
+            ),
+            1.0 / 3.0);
+
+    const PW92Correlation uniform =
+        calculatePW92Correlation(
+            rs);
 
     const double epsilonC =
-        -2.0
-        * PW92_A
-        *
+        uniform.epsilon;
+
+    const double kF =
+        std::pow(
+            3.0 *
+            PI *
+            PI *
+            rho,
+            1.0 / 3.0);
+
+    const double ks =
+        std::sqrt(
+            4.0 *
+            kF /
+            PI);
+
+    const double t =
+        gradientMagnitude /
         (
-            1.0
-            + PW92_ALPHA1 * rs
-        )
-        * logarithm;
-
-    // ------------------------------------------------------------
-    // d[denominatorCore] / dr_s
-    // ------------------------------------------------------------
-
-    const double derivativeCore =
-        PW92_BETA1
-            / (2.0 * sqrtRs)
-        +
-        PW92_BETA2
-        +
-        1.5
-        * PW92_BETA3
-        * sqrtRs
-        +
-        2.0
-        * PW92_BETA4
-        * rs;
-
-    // ------------------------------------------------------------
-    // d[ln(1 + 1/denominator)] / dr_s
-    // ------------------------------------------------------------
-
-    const double derivativeLogarithm =
-        -derivativeCore
-        /
-        (
-            denominatorCore
-            * (1.0 + denominator)
+            2.0 *
+            ks *
+            rho
         );
 
-    // ------------------------------------------------------------
-    // d epsilon_c / dr_s
-    // ------------------------------------------------------------
+    const double t2 =
+        t * t;
 
-    const double derivativeEpsilon =
-        -2.0
-        * PW92_A
-        *
+    if (t2 < 1.0e-30)
+        return epsilonC;
+
+    const double denominatorA =
+        std::expm1(
+            -epsilonC /
+            PBE_GAMMA);
+
+    if (denominatorA <= 0.0)
+        return epsilonC;
+
+    const double A =
         (
-            PW92_ALPHA1 * logarithm
-            +
-            (
-                1.0
-                + PW92_ALPHA1 * rs
-            )
-            * derivativeLogarithm
+            PBE_BETA /
+            PBE_GAMMA
+        ) /
+        denominatorA;
+
+    const double At2 =
+        A *
+        t2;
+
+    const double A2t4 =
+        A *
+        A *
+        t2 *
+        t2;
+
+    const double numerator =
+        (
+            PBE_BETA /
+            PBE_GAMMA
+        ) *
+        t2 *
+        (
+            1.0 +
+            At2
         );
 
-    // ------------------------------------------------------------
-    // v_c = epsilon_c - r_s/3 * d epsilon_c/dr_s
-    // ------------------------------------------------------------
+    const double denominator =
+        1.0 +
+        At2 +
+        A2t4;
+
+    const double x =
+        numerator /
+        denominator;
+
+    const double H =
+        PBE_GAMMA *
+        std::log1p(
+            x);
 
     return
-        epsilonC
-        -
-        (rs / 3.0)
-        * derivativeEpsilon;
+        epsilonC +
+        H;
 }
 
 // ================================================================
-// LDA exchange-correlation potential
+// PBE functional density
 //
-//     V_xc = V_x + V_c
+// f(rho,g) = rho [epsilon_x + epsilon_c]
 // ================================================================
 
-std::vector<double> calculateExchangeCorrelationPotential(
-    const std::vector<double>& u,
-    double dr,
-    int electrons)
+double calculatePBEFunctionalDensity(
+    double rho,
+    double gradientMagnitude)
 {
-    const int N =
-        static_cast<int>(u.size());
+    if (rho <= MIN_DENSITY)
+        return 0.0;
 
-    std::vector<double> Vxc(
-        N,
+    const double exchange =
+        calculatePBEExchangeEnergyPerElectron(
+            rho,
+            gradientMagnitude);
+
+    const double correlation =
+        calculatePBECorrelationEnergyPerElectron(
+            rho,
+            gradientMagnitude);
+
+    return
+        rho *
+        (
+            exchange +
+            correlation
+        );
+}
+
+// ================================================================
+// Partial derivative:
+//
+// df / drho
+// ================================================================
+
+double calculatePartialDensityDerivative(
+    double rho,
+    double gradientMagnitude)
+{
+    if (rho <= MIN_DENSITY)
+        return 0.0;
+
+    constexpr double relativeStep =
+        1.0e-5;
+
+    const double rhoPlus =
+        rho *
+        (1.0 + relativeStep);
+
+    const double rhoMinus =
+        rho *
+        (1.0 - relativeStep);
+
+    const double fPlus =
+        calculatePBEFunctionalDensity(
+            rhoPlus,
+            gradientMagnitude);
+
+    const double fMinus =
+        calculatePBEFunctionalDensity(
+            rhoMinus,
+            gradientMagnitude);
+
+    return
+        (
+            fPlus -
+            fMinus
+        ) /
+        (
+            rhoPlus -
+            rhoMinus
+        );
+}
+
+// ================================================================
+// Partial derivative:
+//
+// df / d|grad rho|
+// ================================================================
+
+double calculatePartialGradientDerivative(
+    double rho,
+    double gradientMagnitude)
+{
+    if (rho <= MIN_DENSITY)
+        return 0.0;
+
+    const double scale =
+        std::max(
+            gradientMagnitude,
+            1.0e-12);
+
+    const double step =
+        1.0e-5 *
+        scale;
+
+    const double gradientPlus =
+        gradientMagnitude +
+        step;
+
+    const double gradientMinus =
+        std::max(
+            0.0,
+            gradientMagnitude -
+            step);
+
+    if (gradientPlus <= gradientMinus)
+        return 0.0;
+
+    const double fPlus =
+        calculatePBEFunctionalDensity(
+            rho,
+            gradientPlus);
+
+    const double fMinus =
+        calculatePBEFunctionalDensity(
+            rho,
+            gradientMinus);
+
+    return
+        (
+            fPlus -
+            fMinus
+        ) /
+        (
+            gradientPlus -
+            gradientMinus
+        );
+}
+
+// ================================================================
+// PBE exchange-correlation energy
+// ================================================================
+
+struct PBEEnergy
+{
+    double exchange;
+    double correlation;
+    double total;
+};
+
+PBEEnergy calculatePBEExchangeCorrelationEnergy(
+    const std::vector<double>& density,
+    double dr)
+{
+    const int n =
+        static_cast<int>(
+            density.size());
+
+    const DensityDerivatives derivatives =
+        calculateDensityDerivatives(
+            density,
+            dr);
+
+    double exchange =
+        0.0;
+
+    double correlation =
+        0.0;
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        const double rho =
+            density[i];
+
+        if (rho <= MIN_DENSITY)
+            continue;
+
+        const double r =
+            radiusAt(
+                i,
+                dr);
+
+        const double gradient =
+            std::abs(
+                derivatives.first[i]);
+
+        const double epsilonX =
+            calculatePBEExchangeEnergyPerElectron(
+                rho,
+                gradient);
+
+        const double epsilonC =
+            calculatePBECorrelationEnergyPerElectron(
+                rho,
+                gradient);
+
+        const double volumeElement =
+            4.0 *
+            PI *
+            r *
+            r *
+            dr;
+
+        const double weight =
+            (i == 0 ||
+             i == n - 1)
+            ? 0.5
+            : 1.0;
+
+        exchange +=
+            weight *
+            rho *
+            epsilonX *
+            volumeElement;
+
+        correlation +=
+            weight *
+            rho *
+            epsilonC *
+            volumeElement;
+    }
+
+    return
+    {
+        exchange,
+        correlation,
+        exchange +
+        correlation
+    };
+}
+
+// ================================================================
+// PBE exchange-correlation potential
+//
+// vxc = df/drho
+//       -
+//       1/r² d/dr [
+//           r² df/d|grad rho|
+//       ]
+// ================================================================
+
+std::vector<double>
+calculatePBEExchangeCorrelationPotential(
+    const std::vector<double>& density,
+    double dr)
+{
+    const int n =
+        static_cast<int>(
+            density.size());
+
+    const DensityDerivatives derivatives =
+        calculateDensityDerivatives(
+            density,
+            dr);
+
+    std::vector<double> partialRho(
+        n,
+        0.0);
+
+    std::vector<double> partialGradient(
+        n,
+        0.0);
+
+    // ------------------------------------------------------------
+    // Local partial derivatives.
+    // ------------------------------------------------------------
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        const double rho =
+            density[i];
+
+        if (rho <= MIN_DENSITY)
+            continue;
+
+        const double gradient =
+            std::abs(
+                derivatives.first[i]);
+
+        partialRho[i] =
+            calculatePartialDensityDerivative(
+                rho,
+                gradient);
+
+        partialGradient[i] =
+            calculatePartialGradientDerivative(
+                rho,
+                gradient);
+    }
+
+    // ------------------------------------------------------------
+    // Radial flux.
+    //
+    // q(r) = r² df/d|grad rho|
+    // ------------------------------------------------------------
+
+    std::vector<double> radialFlux(
+        n,
         0.0);
 
     for (int i = 0;
-         i < N;
+         i < n;
          ++i)
     {
         const double r =
-            radiusAt(i, dr);
+            radiusAt(
+                i,
+                dr);
 
-        const double density =
-            calculateDensity(
-                u[i],
-                r,
-                electrons);
-
-        const double Vx =
-            exchangePotential(
-                density);
-
-        const double Vc =
-            correlationPotential(
-                density);
-
-        Vxc[i] =
-            Vx
-            + Vc;
+        radialFlux[i] =
+            r *
+            r *
+            partialGradient[i];
     }
 
-    return Vxc;
+    // ------------------------------------------------------------
+    // Divergence.
+    // ------------------------------------------------------------
+
+    std::vector<double> divergence(
+        n,
+        0.0);
+
+    // First point.
+    {
+        const double derivativeAtFirstPoint =
+            (
+                -3.0 *
+                radialFlux[0]
+                +
+                4.0 *
+                radialFlux[1]
+                -
+                radialFlux[2]
+            ) /
+            (
+                2.0 *
+                dr
+            );
+
+        const double radiusAtFirstPoint =
+            radiusAt(
+                0,
+                dr);
+
+        divergence[0] =
+            derivativeAtFirstPoint /
+            (
+                radiusAtFirstPoint *
+                radiusAtFirstPoint
+            );
+    }
+
+    // Interior.
+    for (int i = 1;
+         i < n - 1;
+         ++i)
+    {
+        const double derivativeAtInterior =
+            (
+                radialFlux[i + 1] -
+                radialFlux[i - 1]
+            ) /
+            (
+                2.0 *
+                dr
+            );
+
+        const double radiusAtInterior =
+            radiusAt(
+                i,
+                dr);
+
+        divergence[i] =
+            derivativeAtInterior /
+            (
+                radiusAtInterior *
+                radiusAtInterior
+            );
+    }
+
+    // Last point.
+    {
+        const double derivativeAtLastPoint =
+            (
+                3.0 *
+                radialFlux[n - 1]
+                -
+                4.0 *
+                radialFlux[n - 2]
+                +
+                radialFlux[n - 3]
+            ) /
+            (
+                2.0 *
+                dr
+            );
+
+        const double radiusAtLastPoint =
+            radiusAt(
+                n - 1,
+                dr);
+
+        divergence[n - 1] =
+            derivativeAtLastPoint /
+            (
+                radiusAtLastPoint *
+                radiusAtLastPoint
+            );
+    }
+
+    // ------------------------------------------------------------
+    // Functional derivative.
+    // ------------------------------------------------------------
+
+    std::vector<double> potential(
+        n,
+        0.0);
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        if (density[i] <= MIN_DENSITY)
+        {
+            potential[i] =
+                0.0;
+
+            continue;
+        }
+
+        potential[i] =
+            partialRho[i] -
+            divergence[i];
+    }
+
+    return potential;
 }
 
 // ================================================================
-// Total DFT energy
+// Kinetic energy
 //
-//     E = T_s
-//       + E_ext
-//       + E_H
-//       + E_x
-//       + E_c
+// IMPORTANT:
 //
-// For closed-shell He:
+// u is normalized to ONE electron orbital.
 //
-//     T_s = 2 T_orbital
+// For a closed-shell orbital occupied by N electrons:
+//
+//     Ts = N <u| -1/2 d²/dr² |u>
+//
+// Therefore electronCount MUST multiply the one-orbital
+// kinetic contribution.
+// ================================================================
+
+double calculateKineticEnergy(
+    const std::vector<double>& u,
+    double dr,
+    double electronCount)
+{
+    const int n =
+        static_cast<int>(
+            u.size());
+
+    const double inverseDr2 =
+        1.0 /
+        (dr * dr);
+
+    double oneElectronKinetic =
+        0.0;
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        const double left =
+            (i > 0)
+            ? u[i - 1]
+            : 0.0;
+
+        const double center =
+            u[i];
+
+        const double right =
+            (i + 1 < n)
+            ? u[i + 1]
+            : 0.0;
+
+        const double secondDerivative =
+            (
+                left -
+                2.0 * center +
+                right
+            ) *
+            inverseDr2;
+
+        oneElectronKinetic +=
+            u[i] *
+            (
+                -0.5 *
+                secondDerivative
+            ) *
+            dr;
+    }
+
+    return
+        electronCount *
+        oneElectronKinetic;
+}
+
+// ================================================================
+// External nuclear energy
+//
+// Eext = integral rho(-Z/r)d³r
+//
+// With rho = N|u|²/(4 pi r²):
+//
+// Eext = -ZN integral |u|²/r dr
+// ================================================================
+
+double calculateExternalEnergy(
+    const std::vector<double>& u,
+    double dr,
+    double nuclearCharge,
+    double electronCount)
+{
+    const int n =
+        static_cast<int>(
+            u.size());
+
+    double energy =
+        0.0;
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        const double r =
+            radiusAt(
+                i,
+                dr);
+
+        const double weight =
+            (i == 0 ||
+             i == n - 1)
+            ? 0.5
+            : 1.0;
+
+        energy +=
+            weight *
+            (
+                -nuclearCharge *
+                electronCount *
+                u[i] *
+                u[i] /
+                r
+            ) *
+            dr;
+    }
+
+    return energy;
+}
+
+// ================================================================
+// Hartree energy
+//
+// EH = 1/2 integral rho VH d³r
+// ================================================================
+
+double calculateHartreeEnergy(
+    const std::vector<double>& density,
+    const std::vector<double>& hartree,
+    double dr)
+{
+    const int n =
+        static_cast<int>(
+            density.size());
+
+    if (static_cast<int>(
+            hartree.size()) != n)
+    {
+        throw std::runtime_error(
+            "Hartree energy size mismatch.");
+    }
+
+    double energy =
+        0.0;
+
+    for (int i = 0;
+         i < n;
+         ++i)
+    {
+        const double r =
+            radiusAt(
+                i,
+                dr);
+
+        const double weight =
+            (i == 0 ||
+             i == n - 1)
+            ? 0.5
+            : 1.0;
+
+        energy +=
+            weight *
+            0.5 *
+            density[i] *
+            hartree[i] *
+            4.0 *
+            PI *
+            r *
+            r *
+            dr;
+    }
+
+    return energy;
+}
+
+// ================================================================
+// Total PBE energy
+//
+// E = Ts + Eext + EH + Exc
 // ================================================================
 
 double calculateTotalEnergy(
     const std::vector<double>& u,
-    const std::vector<double>& Vext,
-    const std::vector<double>& VH,
+    const std::vector<double>& density,
+    const std::vector<double>& hartree,
     double dr,
-    int electrons)
+    double nuclearCharge,
+    double electronCount)
 {
-    const int N =
-        static_cast<int>(u.size());
+    const double kinetic =
+        calculateKineticEnergy(
+            u,
+            dr,
+            electronCount);
 
-    if (
-        static_cast<int>(Vext.size()) != N ||
-        static_cast<int>(VH.size()) != N)
-    {
-        throw std::runtime_error(
-            "Energy vectors have inconsistent dimensions.");
-    }
+    const double external =
+        calculateExternalEnergy(
+            u,
+            dr,
+            nuclearCharge,
+            electronCount);
 
-    double orbitalKineticEnergy = 0.0;
-    double externalEnergy = 0.0;
-    double hartreeEnergy = 0.0;
-    double exchangeEnergy = 0.0;
-    double correlationEnergy = 0.0;
+    const double hartreeEnergy =
+        calculateHartreeEnergy(
+            density,
+            hartree,
+            dr);
 
-    // ------------------------------------------------------------
-    // Kinetic energy of one spatial orbital
-    //
-    // Piecewise-linear derivative over the full radial interval:
-    //
-    //     [0, dr],
-    //     [dr, 2dr],
-    //     ...
-    //     [Ndr, Rmax]
-    //
-    // with u(0)=u(Rmax)=0.
-    // ------------------------------------------------------------
-
-    for (int interval = 0;
-         interval <= N;
-         ++interval)
-    {
-        double derivative = 0.0;
-
-        if (interval == 0)
-        {
-            derivative =
-                u[0] / dr;
-        }
-        else if (interval == N)
-        {
-            derivative =
-                -u[N - 1] / dr;
-        }
-        else
-        {
-            derivative =
-                (
-                    u[interval]
-                    - u[interval - 1]
-                )
-                / dr;
-        }
-
-        orbitalKineticEnergy +=
-            0.5
-            * derivative
-            * derivative
-            * dr;
-    }
-
-    const double kineticEnergy =
-        static_cast<double>(electrons)
-        * orbitalKineticEnergy;
-
-    // ------------------------------------------------------------
-    // Other energy terms
-    // ------------------------------------------------------------
-
-    for (int i = 0;
-         i < N;
-         ++i)
-    {
-        const double r =
-            radiusAt(i, dr);
-
-        const double u2 =
-            u[i] * u[i];
-
-        // --------------------------------------------------------
-        // Nuclear attraction
-        //
-        // E_ext = integral rho V_ext d^3r
-        //       = Ne integral |u|² V_ext dr
-        // --------------------------------------------------------
-
-        externalEnergy +=
-            static_cast<double>(electrons)
-            * u2
-            * Vext[i]
-            * dr;
-
-        // --------------------------------------------------------
-        // Hartree energy
-        //
-        // E_H = 1/2 integral rho V_H d^3r
-        // --------------------------------------------------------
-
-        hartreeEnergy +=
-            0.5
-            * static_cast<double>(electrons)
-            * u2
-            * VH[i]
-            * dr;
-
-        // --------------------------------------------------------
-        // Electron density
-        // --------------------------------------------------------
-
-        const double density =
-            calculateDensity(
-                u[i],
-                r,
-                electrons);
-
-        // --------------------------------------------------------
-        // Exchange
-        // --------------------------------------------------------
-
-        const double epsilonX =
-            exchangeEnergyPerParticle(
-                density);
-
-        exchangeEnergy +=
-            static_cast<double>(electrons)
-            * u2
-            * epsilonX
-            * dr;
-
-        // --------------------------------------------------------
-        // Correlation
-        // --------------------------------------------------------
-
-        const double epsilonC =
-            correlationEnergyPerParticle(
-                density);
-
-        correlationEnergy +=
-            static_cast<double>(electrons)
-            * u2
-            * epsilonC
-            * dr;
-    }
+    const PBEEnergy xc =
+        calculatePBEExchangeCorrelationEnergy(
+            density,
+            dr);
 
     return
-        kineticEnergy
-        + externalEnergy
-        + hartreeEnergy
-        + exchangeEnergy
-        + correlationEnergy;
+        kinetic +
+        external +
+        hartreeEnergy +
+        xc.total;
 }
 
 // ================================================================
-// HYDROGEN
-//
-// One electron:
-//
-//     H = -1/2 ∇² - 1/r
-//
-// Electron-electron terms are disabled for this validation.
+// Hydrogen
 // ================================================================
 
-void runHydrogen()
+double runHydrogen()
 {
-    constexpr int N = 2000;
-    constexpr double R_MAX = 30.0;
-    constexpr double Z = 1.0;
+    std::cout
+        << "====================================================\n"
+        << "HYDROGEN\n"
+        << "========\n\n";
+
+    const int N =
+        2000;
+
+    const double Rmax =
+        30.0;
 
     const double dr =
-        R_MAX
-        / static_cast<double>(N + 1);
+        Rmax /
+        static_cast<double>(
+            N + 1);
+
+    const double Z =
+        1.0;
 
     std::vector<double> potential(
-        N,
-        0.0);
+        N);
 
     for (int i = 0;
          i < N;
          ++i)
     {
         const double r =
-            radiusAt(i, dr);
+            radiusAt(
+                i,
+                dr);
 
         potential[i] =
             -Z / r;
     }
 
+    std::vector<double> initialGuess(
+        N);
+
+    for (int i = 0;
+         i < N;
+         ++i)
+    {
+        const double r =
+            radiusAt(
+                i,
+                dr);
+
+        initialGuess[i] =
+            r *
+            std::exp(-r);
+    }
+
     const OrbitalResult result =
         solveGroundState(
             potential,
-            dr);
+            dr,
+            initialGuess);
 
-    constexpr double exactEnergy =
+    const double exactEnergy =
         -0.5;
 
-    const double error =
+    const double absoluteError =
         std::abs(
-            result.eigenvalue
-            - exactEnergy);
+            result.eigenvalue -
+            exactEnergy);
 
     std::cout
-        << "\n====================================================\n"
-        << "HYDROGEN\n"
-        << "====================================================\n\n";
+        << std::setprecision(15);
 
     std::cout
         << "Grid points:       "
@@ -1359,449 +1937,556 @@ void runHydrogen()
 
     std::cout
         << "Absolute error:    "
-        << error
-        << " Ha\n";
+        << absoluteError
+        << " Ha\n\n";
 
-    if (error < 1.0e-4)
-        std::cout << "\nPASS\n";
+    if (absoluteError < 1.0e-4)
+        std::cout
+            << "PASS\n";
     else
-        std::cout << "\nWARNING\n";
+        std::cout
+            << "FAIL\n";
+
+    std::cout
+        << "\n";
+
+    return result.eigenvalue;
 }
 
 // ================================================================
-// HELIUM
+// Helium
 //
-// Restricted Kohn-Sham:
+// Closed shell:
 //
-//     He = 1s²
+//     1s²
 //
-// Hartree: ON
-// Exchange: LDA Dirac
-// Correlation: LDA PW92
+// Spherical, spin-unpolarized PBE.
 // ================================================================
 
 SCFResult runHelium()
 {
-    constexpr int N = 2000;
-    constexpr double R_MAX = 30.0;
+    std::cout
+        << "====================================================\n"
+        << "HELIUM\n"
+        << "======\n\n";
 
-    constexpr double Z = 2.0;
-    constexpr int electrons = 2;
+    const int N =
+        2000;
 
-    constexpr int MAX_SCF_ITERATIONS =
-        100;
-
-    constexpr double DENSITY_MIXING =
-        0.30;
-
-    constexpr double SCF_TOLERANCE =
-        1.0e-9;
+    const double Rmax =
+        30.0;
 
     const double dr =
-        R_MAX
-        / static_cast<double>(N + 1);
+        Rmax /
+        static_cast<double>(
+            N + 1);
+
+    const double Z =
+        2.0;
+
+    const double electronCount =
+        2.0;
+
+    const int maxIterations =
+        100;
+
+    const double mixing =
+        0.30;
+
+    const double densityTolerance =
+        1.0e-9;
+
+    const double energyTolerance =
+        1.0e-11;
 
     // ------------------------------------------------------------
-    // Nuclear potential
+    // Initial hydrogenic orbital.
     // ------------------------------------------------------------
 
-    std::vector<double> Vext(
-        N,
-        0.0);
+    std::vector<double> orbital(
+        N);
 
     for (int i = 0;
          i < N;
          ++i)
     {
         const double r =
-            radiusAt(i, dr);
+            radiusAt(
+                i,
+                dr);
 
-        Vext[i] =
-            -Z / r;
-    }
-
-    // ------------------------------------------------------------
-    // Initial hydrogenic 1s orbital
-    // ------------------------------------------------------------
-
-    std::vector<double> u(
-        N,
-        0.0);
-
-    for (int i = 0;
-         i < N;
-         ++i)
-    {
-        const double r =
-            radiusAt(i, dr);
-
-        u[i] =
-            r
-            * std::exp(-Z * r);
+        orbital[i] =
+            r *
+            std::exp(
+                -Z * r);
     }
 
     normalize(
-        u,
+        orbital,
         dr);
 
-    double previousEnergy = 0.0;
+    std::vector<double> density =
+        calculateDensity(
+            orbital,
+            dr,
+            electronCount);
 
-    double densityError = 0.0;
-    double orbitalEnergy = 0.0;
-    double totalEnergy = 0.0;
+    double previousEnergy =
+        std::numeric_limits<double>::quiet_NaN();
 
-    int completedIterations = 0;
+    double finalDensityError =
+        std::numeric_limits<double>::infinity();
 
-    std::cout
-        << "\n====================================================\n"
-        << "HELIUM\n"
-        << "====================================================\n\n";
+    double finalEnergy =
+        0.0;
 
-    std::cout
-        << "System\n"
-        << "------\n";
+    double finalOrbitalEnergy =
+        0.0;
 
-    std::cout
-        << "Element:             He\n";
+    int iterationsUsed =
+        maxIterations;
 
-    std::cout
-        << "Nuclear charge:      Z = "
-        << Z
-        << "\n";
-
-    std::cout
-        << "Electrons:           "
-        << electrons
-        << "\n";
+    bool converged =
+        false;
 
     std::cout
+        << "System\n\n";
+
+    std::cout
+        << "Element:             He\n"
+        << "Nuclear charge:      Z = 2\n"
+        << "Electrons:           2\n"
         << "Configuration:       1s^2\n\n";
 
     std::cout
-        << "Kohn-Sham model\n"
-        << "---------------\n";
+        << "Kohn-Sham model\n\n";
 
     std::cout
-        << "Hartree:             ON\n";
-
-    std::cout
-        << "Exchange:            LDA Dirac\n";
-
-    std::cout
-        << "Correlation:         LDA PW92\n";
-
-    std::cout
+        << "Hartree:             ON\n"
+        << "Exchange:            PBE-GGA\n"
+        << "Correlation:         PBE-GGA\n"
         << "SCF mixing:          "
-        << DENSITY_MIXING
+        << mixing
         << "\n\n";
 
     std::cout
-        << "SCF iterations\n"
-        << "--------------\n";
+        << "SCF iterations\n\n";
+
+    std::cout
+        << std::setprecision(15);
 
     for (int iteration = 1;
-         iteration <= MAX_SCF_ITERATIONS;
+         iteration <= maxIterations;
          ++iteration)
     {
-        completedIterations =
-            iteration;
-
         // --------------------------------------------------------
-        // Hartree potential
+        // Hartree.
         // --------------------------------------------------------
 
-        const std::vector<double> VH =
+        const std::vector<double> hartree =
             calculateHartreePotential(
-                u,
+                orbital,
                 dr,
-                electrons);
+                electronCount);
 
         // --------------------------------------------------------
-        // Exchange-correlation potential
-        //
-        //     V_xc = V_x + V_c
+        // PBE exchange-correlation potential.
         // --------------------------------------------------------
 
-        const std::vector<double> Vxc =
-            calculateExchangeCorrelationPotential(
-                u,
-                dr,
-                electrons);
-
-        // --------------------------------------------------------
-        // Kohn-Sham potential
-        //
-        //     V_KS = V_ext + V_H + V_xc
-        // --------------------------------------------------------
-
-        std::vector<double> VKs(
-            N,
-            0.0);
-
-        for (int i = 0;
-             i < N;
-             ++i)
-        {
-            VKs[i] =
-                Vext[i]
-                + VH[i]
-                + Vxc[i];
-        }
-
-        // --------------------------------------------------------
-        // Solve Kohn-Sham equation
-        // --------------------------------------------------------
-
-        const OrbitalResult orbital =
-            solveGroundState(
-                VKs,
+        const std::vector<double> exchangeCorrelation =
+            calculatePBEExchangeCorrelationPotential(
+                density,
                 dr);
 
-        orbitalEnergy =
-            orbital.eigenvalue;
-
         // --------------------------------------------------------
-        // Calculate raw density residual
-        //
-        // This is deliberately calculated BEFORE mixing:
-        //
-        //     dRho = integral |rho_new - rho_old| dr
-        //
-        // The previous implementation measured the change after
-        // mixing, which is smaller by approximately the mixing
-        // factor. The raw residual is the more direct SCF
-        // convergence criterion.
+        // Kohn-Sham potential.
         // --------------------------------------------------------
 
-        densityError = 0.0;
+        std::vector<double> effectivePotential(
+            N);
 
         for (int i = 0;
              i < N;
              ++i)
         {
-            const double oldDensity =
-                u[i] * u[i];
+            const double r =
+                radiusAt(
+                    i,
+                    dr);
 
-            const double newDensity =
-                orbital.u[i]
-                * orbital.u[i];
-
-            densityError +=
-                std::abs(
-                    newDensity
-                    - oldDensity)
-                * dr;
+            effectivePotential[i] =
+                -Z / r +
+                hartree[i] +
+                exchangeCorrelation[i];
         }
 
         // --------------------------------------------------------
-        // Mix densities
+        // Solve Kohn-Sham equation.
         // --------------------------------------------------------
 
-        std::vector<double> mixedU(
-            N,
-            0.0);
+        const OrbitalResult orbitalResult =
+            solveGroundState(
+                effectivePotential,
+                dr,
+                orbital);
+
+        finalOrbitalEnergy =
+            orbitalResult.eigenvalue;
+
+        // --------------------------------------------------------
+        // New density.
+        // --------------------------------------------------------
+
+        const std::vector<double> newDensity =
+            calculateDensity(
+                orbitalResult.u,
+                dr,
+                electronCount);
+
+        // --------------------------------------------------------
+        // Raw density residual.
+        // --------------------------------------------------------
+
+        double densityError =
+            0.0;
 
         for (int i = 0;
              i < N;
              ++i)
         {
-            const double oldDensity =
-                u[i] * u[i];
+            const double r =
+                radiusAt(
+                    i,
+                    dr);
 
-            const double newDensity =
-                orbital.u[i]
-                * orbital.u[i];
+            const double weight =
+                (i == 0 ||
+                 i == N - 1)
+                ? 0.5
+                : 1.0;
 
-            const double mixedDensity =
+            densityError +=
+                weight *
+                std::abs(
+                    newDensity[i] -
+                    density[i]) *
+                4.0 *
+                PI *
+                r *
+                r *
+                dr;
+        }
+
+        // --------------------------------------------------------
+        // Density mixing.
+        // --------------------------------------------------------
+
+        std::vector<double> mixedDensity(
+            N);
+
+        for (int i = 0;
+             i < N;
+             ++i)
+        {
+            mixedDensity[i] =
                 (
-                    1.0
-                    - DENSITY_MIXING
-                )
-                * oldDensity
+                    1.0 -
+                    mixing
+                ) *
+                density[i]
                 +
-                DENSITY_MIXING
-                * newDensity;
+                mixing *
+                newDensity[i];
+        }
 
-            mixedU[i] =
+        // --------------------------------------------------------
+        // Normalize mixed density to exactly two electrons.
+        // --------------------------------------------------------
+
+        double electronNumber =
+            0.0;
+
+        for (int i = 0;
+             i < N;
+             ++i)
+        {
+            const double r =
+                radiusAt(
+                    i,
+                    dr);
+
+            const double weight =
+                (i == 0 ||
+                 i == N - 1)
+                ? 0.5
+                : 1.0;
+
+            electronNumber +=
+                weight *
+                mixedDensity[i] *
+                4.0 *
+                PI *
+                r *
+                r *
+                dr;
+        }
+
+        if (electronNumber <= 0.0)
+            throw std::runtime_error(
+                "Invalid mixed electron density.");
+
+        const double densityScale =
+            electronCount /
+            electronNumber;
+
+        for (double& value :
+             mixedDensity)
+        {
+            value *=
+                densityScale;
+        }
+
+        // --------------------------------------------------------
+        // Construct orbital from mixed density.
+        // --------------------------------------------------------
+
+        std::vector<double> mixedOrbital(
+            N);
+
+        for (int i = 0;
+             i < N;
+             ++i)
+        {
+            const double r =
+                radiusAt(
+                    i,
+                    dr);
+
+            const double value =
+                mixedDensity[i] *
+                4.0 *
+                PI *
+                r *
+                r /
+                electronCount;
+
+            mixedOrbital[i] =
                 std::sqrt(
                     std::max(
                         0.0,
-                        mixedDensity));
+                        value));
         }
 
-        // --------------------------------------------------------
-        // Normalize mixed orbital
-        // --------------------------------------------------------
-
         normalize(
-            mixedU,
+            mixedOrbital,
             dr);
 
-        u =
-            std::move(mixedU);
-
         // --------------------------------------------------------
-        // Recalculate Hartree from updated density
+        // Energy.
         // --------------------------------------------------------
 
-        const std::vector<double> finalVH =
+        const std::vector<double> mixedHartree =
             calculateHartreePotential(
-                u,
+                mixedOrbital,
                 dr,
-                electrons);
+                electronCount);
 
-        // --------------------------------------------------------
-        // Total DFT energy
-        // --------------------------------------------------------
-
-        totalEnergy =
+        const double totalEnergy =
             calculateTotalEnergy(
-                u,
-                Vext,
-                finalVH,
+                mixedOrbital,
+                mixedDensity,
+                mixedHartree,
                 dr,
-                electrons);
+                Z,
+                electronCount);
 
-        // --------------------------------------------------------
-        // Energy change
-        // --------------------------------------------------------
+        double energyChange =
+            std::numeric_limits<double>::infinity();
 
-        double energyChange = 0.0;
-
-        if (iteration > 1)
+        if (std::isfinite(
+                previousEnergy))
         {
             energyChange =
                 std::abs(
-                    totalEnergy
-                    - previousEnergy);
+                    totalEnergy -
+                    previousEnergy);
         }
         else
         {
             energyChange =
-                std::abs(totalEnergy);
+                std::abs(
+                    totalEnergy);
         }
 
         // --------------------------------------------------------
-        // Output
+        // Update.
         // --------------------------------------------------------
 
-        if (
-            iteration == 1
-            ||
-            iteration % 5 == 0
-        )
+        density =
+            std::move(
+                mixedDensity);
+
+        orbital =
+            std::move(
+                mixedOrbital);
+
+        previousEnergy =
+            totalEnergy;
+
+        finalEnergy =
+            totalEnergy;
+
+        finalDensityError =
+            densityError;
+
+        // --------------------------------------------------------
+        // Output.
+        // --------------------------------------------------------
+
+        if (iteration == 1 ||
+            iteration % 5 == 0)
         {
             std::cout
                 << "Iteration "
                 << std::setw(3)
                 << iteration
-
                 << "   orbital = "
-                << std::setw(14)
-                << orbitalEnergy
-
-                << " Ha   E = "
-                << std::setw(14)
-                << totalEnergy
-
-                << " Ha   dE = "
+                << finalOrbitalEnergy
+                << " Ha"
+                << "   E = "
+                << finalEnergy
+                << " Ha"
+                << "   dE = "
                 << energyChange
-
                 << "   dRho = "
-                << densityError
+                << finalDensityError
                 << "\n";
         }
 
         // --------------------------------------------------------
-        // SCF convergence
-        //
-        // Both the raw density residual and energy change must
-        // satisfy the tolerance.
+        // Convergence.
         // --------------------------------------------------------
 
-        if (
-            iteration > 1
-            &&
-            densityError
-                < SCF_TOLERANCE
-            &&
-            energyChange
-                < SCF_TOLERANCE
-        )
+        if (iteration > 1 &&
+            finalDensityError <
+                densityTolerance &&
+            energyChange <
+                energyTolerance)
         {
-            std::cout
-                << "\nSCF converged after "
-                << iteration
-                << " iterations.\n";
+            iterationsUsed =
+                iteration;
 
-            return
-            {
-                totalEnergy,
-                orbitalEnergy,
-                densityError,
-                iteration
-            };
+            converged =
+                true;
+
+            break;
         }
-
-        previousEnergy =
-            totalEnergy;
     }
 
-    std::cout
-        << "\nSCF reached maximum iterations.\n";
+    // ------------------------------------------------------------
+    // Final Kohn-Sham solution.
+    // ------------------------------------------------------------
+
+    const std::vector<double> finalHartree =
+        calculateHartreePotential(
+            orbital,
+            dr,
+            electronCount);
+
+    const std::vector<double> finalXC =
+        calculatePBEExchangeCorrelationPotential(
+            density,
+            dr);
+
+    std::vector<double> finalPotential(
+        N);
+
+    for (int i = 0;
+         i < N;
+         ++i)
+    {
+        const double r =
+            radiusAt(
+                i,
+                dr);
+
+        finalPotential[i] =
+            -Z / r +
+            finalHartree[i] +
+            finalXC[i];
+    }
+
+    const OrbitalResult finalOrbital =
+        solveGroundState(
+            finalPotential,
+            dr,
+            orbital);
+
+    finalOrbitalEnergy =
+        finalOrbital.eigenvalue;
+
+    if (converged)
+    {
+        std::cout
+            << "\nSCF converged after "
+            << iterationsUsed
+            << " iterations.\n";
+    }
+    else
+    {
+        std::cout
+            << "\nSCF did NOT converge within "
+            << maxIterations
+            << " iterations.\n";
+    }
 
     return
     {
-        totalEnergy,
-        orbitalEnergy,
-        densityError,
-        completedIterations
+        finalEnergy,
+        finalOrbitalEnergy,
+        finalDensityError,
+        iterationsUsed
     };
 }
 
 // ================================================================
-// MAIN
+// Main
 // ================================================================
 
 int main()
 {
     std::cout
-        << std::setprecision(12);
-
-    std::cout
-        << "====================================================\n"
+        << "======================================================\n"
         << "          MINIMAL KOHN-SHAM DFT\n"
-        << "====================================================\n";
+        << "======================================================\n\n";
 
-    // ------------------------------------------------------------
-    // Hydrogen validation
-    // ------------------------------------------------------------
-
-    runHydrogen();
-
-    // ------------------------------------------------------------
-    // Helium validation
-    // ------------------------------------------------------------
+    const double hydrogenEnergy =
+        runHydrogen();
 
     const SCFResult helium =
         runHelium();
 
-    // ------------------------------------------------------------
-    // Summary
-    // ------------------------------------------------------------
+    std::cout
+        << "====================================================\n"
+        << "SUMMARY\n"
+        << "=======\n\n";
 
     std::cout
-        << "\n====================================================\n"
-        << "SUMMARY\n"
-        << "====================================================\n\n";
+        << std::setprecision(15);
 
     std::cout
         << "Hydrogen\n"
         << "--------\n";
 
     std::cout
-        << "Expected ground state: "
-        << "-0.5 Ha\n\n";
+        << "Numerical energy:     "
+        << hydrogenEnergy
+        << " Ha\n";
+
+    std::cout
+        << "Exact energy:         "
+        << -0.5
+        << " Ha\n\n";
 
     std::cout
         << "Helium\n"
@@ -1816,7 +2501,7 @@ int main()
         << " Ha\n";
 
     std::cout
-        << "DFT total energy:     "
+        << "PBE total energy:     "
         << helium.totalEnergy
         << " Ha\n";
 
@@ -1828,19 +2513,17 @@ int main()
     std::cout
         << "Final density change: "
         << helium.densityError
-        << "\n";
+        << "\n\n";
 
     std::cout
-        << "\nFunctional:\n"
-        << "LDA Dirac exchange + PW92 correlation\n";
+        << "Exchange:             PBE-GGA\n"
+        << "Correlation:          PBE-GGA\n";
 
     std::cout
-        << "\nReference:\n"
-        << "Exact non-relativistic He energy "
-        << "approximately -2.9037 Ha.\n";
+        << "Reference He energy:  approximately -2.9037 Ha\n\n";
 
     std::cout
-        << "\n====================================================\n";
+        << "====================================================\n";
 
     return 0;
 }
