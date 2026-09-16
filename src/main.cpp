@@ -1,7 +1,7 @@
 #include "AtomicDFT.h"
 #include "DFTConstants.h"
 #include "ElectronicConfiguration.h"
-#include "PZ81.h"
+#include "PBE96.h"
 #include "RadialGrid.h"
 
 #include <iomanip>
@@ -16,10 +16,10 @@ int main() {
             DFTConstants::RMAX
         );
 
-        PZ81 pz81;
+        PBE96 pbe96;
 
         const XCFunctional& functional =
-            pz81;
+            pbe96;
 
         const std::vector<int> atomicNumbers = {
             1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
@@ -31,7 +31,7 @@ int main() {
         results.reserve(atomicNumbers.size());
 
         std::cout
-            << "\nDFT atomico LSDA-PZ81 | H-Zn\n"
+            << "\nDFT atomico PBE96 | H-Zn\n"
             << "Grid: "
             << DFTConstants::GRID_POINTS
             << " puntos | Rmax: "

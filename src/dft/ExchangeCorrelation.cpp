@@ -50,6 +50,105 @@ double calculateRadialGradient(
         );
 }
 
+double calculateRadialDivergence(
+    const std::vector<double>& r,
+    const std::vector<double>& coefficient,
+    std::size_t i
+) {
+    const std::size_t size =
+        r.size();
+
+    if (size < 2) {
+        throw std::invalid_argument(
+            "Se necesitan al menos dos puntos radiales."
+        );
+    }
+
+    if (r[i] == 0.0) {
+        return 0.0;
+    }
+
+    if (i == 0) {
+        const double radialValue0 =
+            r[0] * r[0] * coefficient[0];
+
+        const double radialValue1 =
+            r[1] * r[1] * coefficient[1];
+
+        const double derivative =
+            (
+                radialValue1 -
+                radialValue0
+            ) /
+            (
+                r[1] -
+                r[0]
+            );
+
+        return
+            derivative /
+            (
+                r[0] * r[0]
+            );
+    }
+
+    if (i == size - 1) {
+        const double radialValuePrevious =
+            r[size - 2] *
+            r[size - 2] *
+            coefficient[size - 2];
+
+        const double radialValueCurrent =
+            r[size - 1] *
+            r[size - 1] *
+            coefficient[size - 1];
+
+        const double derivative =
+            (
+                radialValueCurrent -
+                radialValuePrevious
+            ) /
+            (
+                r[size - 1] -
+                r[size - 2]
+            );
+
+        return
+            derivative /
+            (
+                r[size - 1] *
+                r[size - 1]
+            );
+    }
+
+    const double radialValuePrevious =
+        r[i - 1] *
+        r[i - 1] *
+        coefficient[i - 1];
+
+    const double radialValueNext =
+        r[i + 1] *
+        r[i + 1] *
+        coefficient[i + 1];
+
+    const double derivative =
+        (
+            radialValueNext -
+            radialValuePrevious
+        ) /
+        (
+            r[i + 1] -
+            r[i - 1]
+        );
+
+    return
+        derivative /
+        (
+            r[i] *
+            r[i]
+        );
+}
+
 }
 
 std::vector<double> calculateSpinExchangeCorrelationPotential(
@@ -79,7 +178,12 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
         );
     }
 
-    std::vector<double> potential(
+    std::vector<double> densityDerivative(
+        alphaDensity.size(),
+        0.0
+    );
+
+    std::vector<double> gradientCoefficient(
         alphaDensity.size(),
         0.0
     );
@@ -116,12 +220,54 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
             );
 
         if (spin == 0) {
-            potential[i] =
+            densityDerivative[i] =
                 result.potentialAlpha;
+
+            gradientCoefficient[i] =
+                result.gradientCoefficientAlpha;
         } else {
-            potential[i] =
+            densityDerivative[i] =
                 result.potentialBeta;
+
+            gradientCoefficient[i] =
+                result.gradientCoefficientBeta;
         }
+    }
+
+    std::vector<double> potential(
+        alphaDensity.size(),
+        0.0
+    );
+
+    for (std::size_t i = 0;
+         i < alphaDensity.size();
+         ++i) {
+
+        const double density =
+            alphaDensity[i] +
+            betaDensity[i];
+
+        if (density <= DFTConstants::RHO_FLOOR) {
+            potential[i] = 0.0;
+            continue;
+        }
+
+        if (r[i] == 0.0) {
+            potential[i] =
+                densityDerivative[i];
+            continue;
+        }
+
+        const double divergence =
+            calculateRadialDivergence(
+                r,
+                gradientCoefficient,
+                i
+            );
+
+        potential[i] =
+            densityDerivative[i] -
+            divergence;
     }
 
     return potential;

@@ -4,8 +4,12 @@
 
 struct XCResult {
     double energyPerElectron;
+
     double potentialAlpha;
     double potentialBeta;
+
+    double gradientCoefficientAlpha;
+    double gradientCoefficientBeta;
 };
 
 class XCFunctional {

@@ -456,6 +456,8 @@ XCResult PZ81::evaluate(
         return {
             0.0,
             0.0,
+            0.0,
+            0.0,
             0.0
         };
     }
@@ -492,6 +494,8 @@ XCResult PZ81::evaluate(
     return {
         energyPerElectron,
         potentialAlpha,
-        potentialBeta
+        potentialBeta,
+        0.0,
+        0.0
     };
 }
