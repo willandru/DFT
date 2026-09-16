@@ -210,20 +210,63 @@ double exchangeEnergyPerElectron(
         std::cbrt(density);
 }
 
+double spinExchangeScaling(
+    double zeta
+) {
+    const double z =
+        std::clamp(
+            zeta,
+            -1.0,
+            1.0
+        );
+
+    return
+        (
+            std::pow(
+                1.0 + z,
+                4.0 / 3.0
+            ) +
+            std::pow(
+                1.0 - z,
+                4.0 / 3.0
+            )
+        ) / 2.0;
+}
+
+double spinExchangeScalingDerivative(
+    double zeta
+) {
+    const double z =
+        std::clamp(
+            zeta,
+            -1.0,
+            1.0
+        );
+
+    return
+        2.0 / 3.0 *
+        (
+            std::pow(
+                1.0 + z,
+                1.0 / 3.0
+            ) -
+            std::pow(
+                1.0 - z,
+                1.0 / 3.0
+            )
+        );
+}
+
 double exchangeEnergyPerElectronSpin(
     double density,
     double zeta
 ) {
-    const double unpolarized =
+    return
         exchangeEnergyPerElectron(
             density
-        );
-
-    return
-        unpolarized *
-        (
-            1.0 +
-            spinInterpolation(zeta)
+        ) *
+        spinExchangeScaling(
+            zeta
         );
 }
 
@@ -306,20 +349,24 @@ double spinExchangeCorrelationPotential(
     const double rs =
         rsFromDensity(density);
 
-    const double f =
-        spinInterpolation(zeta);
-
-    const double df =
-        spinInterpolationDerivative(zeta);
-
     const double exchange =
         exchangeEnergyPerElectron(
             density
         );
 
+    const double exchangeScaling =
+        spinExchangeScaling(
+            zeta
+        );
+
+    const double exchangeScalingDerivative =
+        spinExchangeScalingDerivative(
+            zeta
+        );
+
     const double exchangeSpin =
         exchange *
-        (1.0 + f);
+        exchangeScaling;
 
     const double exchangeDerivativeRs =
         -exchangeSpin / rs;
@@ -348,6 +395,12 @@ double spinExchangeCorrelationPotential(
             POLARIZED
         );
 
+    const double f =
+        spinInterpolation(zeta);
+
+    const double df =
+        spinInterpolationDerivative(zeta);
+
     const double correlation =
         epsilonCorrelation0 +
         f *
@@ -373,7 +426,8 @@ double spinExchangeCorrelationPotential(
         correlationDerivativeRs;
 
     const double epsilonXCzeta =
-        exchange * df +
+        exchange *
+        exchangeScalingDerivative +
         df *
         (
             epsilonCorrelation1 -
@@ -585,8 +639,7 @@ double calculateExchangeCorrelationEnergy(
             energy +=
                 0.5 * integrand;
         } else {
-            energy +=
-                integrand;
+            energy += integrand;
         }
     }
 
@@ -665,8 +718,7 @@ double calculateSpinExchangeCorrelationEnergy(
             energy +=
                 0.5 * integrand;
         } else {
-            energy +=
-                integrand;
+            energy += integrand;
         }
     }
 

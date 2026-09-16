@@ -16,14 +16,16 @@ int main() {
         );
 
         const std::vector<int> atomicNumbers = {
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+            1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
+            11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+            21, 22, 23, 24, 25, 26, 27, 28, 29, 30
         };
 
         std::vector<AtomicResult> results;
         results.reserve(atomicNumbers.size());
 
         std::cout
-            << "\nDFT atomico LSDA-PZ81 | H-Ne\n"
+            << "\nDFT atomico LSDA-PZ81 | H-Zn\n"
             << "Grid: "
             << DFTConstants::GRID_POINTS
             << " puntos | Rmax: "
@@ -113,17 +115,72 @@ int main() {
         }
 
         std::cout
-            << "\nENERGIAS\n";
+            << "\nENERGIAS POR COMPONENTE\n"
+            << std::scientific
+            << std::setprecision(10);
+
+        std::cout
+            << "Atom        Ts              Eext            EH"
+            << "             Exc             Etot\n"
+            << "--------------------------------------------------------------------------\n";
 
         for (const AtomicResult& result : results) {
+            const EnergyComponents& energy =
+                result.scf.energy;
+
             std::cout
-                << std::setw(3)
+                << std::left
+                << std::setw(5)
                 << result.symbol
-                << "  "
-                << std::scientific
-                << std::setprecision(10)
-                << result.scf.energy.total
-                << " Ha\n";
+                << std::right
+                << std::setw(17)
+                << energy.kinetic
+                << std::setw(17)
+                << energy.external
+                << std::setw(17)
+                << energy.hartree
+                << std::setw(17)
+                << energy.exchangeCorrelation
+                << std::setw(17)
+                << energy.total
+                << '\n';
+        }
+
+        std::cout
+            << "\nVERIFICACION DE LA SUMA DE ENERGIAS\n"
+            << std::scientific
+            << std::setprecision(10);
+
+        std::cout
+            << "Atom        Ts+Eext+EH+Exc        Etot"
+            << "                 Diferencia\n"
+            << "--------------------------------------------------------------------------\n";
+
+        for (const AtomicResult& result : results) {
+            const EnergyComponents& energy =
+                result.scf.energy;
+
+            const double reconstructed =
+                energy.kinetic
+                + energy.external
+                + energy.hartree
+                + energy.exchangeCorrelation;
+
+            const double difference =
+                reconstructed - energy.total;
+
+            std::cout
+                << std::left
+                << std::setw(5)
+                << result.symbol
+                << std::right
+                << std::setw(22)
+                << reconstructed
+                << std::setw(17)
+                << energy.total
+                << std::setw(20)
+                << difference
+                << '\n';
         }
 
         std::cout << '\n';
