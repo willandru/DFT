@@ -6,25 +6,21 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using std::vector;
 
 constexpr double PI = 3.1415926535897932384626433832795;
-
 constexpr int N = 2000;
 constexpr double RMAX = 30.0;
-
 constexpr double MIXING = 0.25;
 constexpr int MAX_SCF_ITER = 250;
-
 constexpr double DENSITY_TOL = 1.0e-9;
 constexpr double ENERGY_TOL = 1.0e-11;
 constexpr double KS_RESIDUAL_TOL = 1.0e-7;
-
 constexpr double EPS = 1.0e-14;
 constexpr double RHO_FLOOR = 1.0e-20;
-
 constexpr double H_EXACT = -0.5;
 
 struct AtomicOrbital
@@ -43,21 +39,17 @@ struct AtomResult
     std::string symbol;
     int Z = 0;
     int electrons = 0;
-
     double totalEnergy = 0.0;
     double kineticEnergy = 0.0;
     double externalEnergy = 0.0;
     double hartreeEnergy = 0.0;
     double xcEnergy = 0.0;
-
     double electronNumber = 0.0;
     double densityResidual = 0.0;
     double energyResidual = 0.0;
     double ksResidual = 0.0;
-
     int iterations = 0;
     bool converged = false;
-
     vector<AtomicOrbital> orbitals;
 };
 
@@ -81,11 +73,10 @@ double radialStep()
 vector<double> buildRadialGrid()
 {
     const double dr = radialStep();
-
     vector<double> r(N);
 
     for (int i = 0; i < N; ++i)
-        r[i] = static_cast<double>(i + 1) * dr;
+        r[i] = (i + 1) * dr;
 
     return r;
 }
@@ -115,16 +106,10 @@ vector<AtomicOrbital> configurationForZ(int Z)
     switch (Z)
     {
         case 1:
-            return
-            {
-                {"1s", 1, 0, 1.0, 0}
-            };
+            return {{"1s", 1, 0, 1.0, 0}};
 
         case 2:
-            return
-            {
-                {"1s", 1, 0, 2.0, 0}
-            };
+            return {{"1s", 1, 0, 2.0, 0}};
 
         case 3:
             return
@@ -164,7 +149,6 @@ vector<AtomicOrbital> configurationForZ(int Z)
 void normalizeOrbital(vector<double>& u)
 {
     const double dr = radialStep();
-
     double norm = 0.0;
 
     for (double value : u)
@@ -182,7 +166,6 @@ void normalizeOrbital(vector<double>& u)
 double orbitalNorm(const vector<double>& u)
 {
     const double dr = radialStep();
-
     double norm = 0.0;
 
     for (double value : u)
@@ -196,11 +179,9 @@ double dotProduct(
     const vector<double>& b)
 {
     if (a.size() != b.size())
-        throw std::runtime_error(
-            "Vectores incompatibles en producto interno.");
+        throw std::runtime_error("Vectores incompatibles.");
 
     const double dr = radialStep();
-
     double result = 0.0;
 
     for (int i = 0; i < N; ++i)
@@ -326,8 +307,7 @@ vector<double> solveTridiagonal(
                 "Singularidad en sistema tridiagonal.");
 
         if (i < n - 1)
-            cp[i] =
-                c[i] / denominator;
+            cp[i] = c[i] / denominator;
 
         dp[i] =
             (
@@ -342,11 +322,9 @@ vector<double> solveTridiagonal(
     x[n - 1] = dp[n - 1];
 
     for (int i = n - 2; i >= 0; --i)
-    {
         x[i] =
             dp[i] -
             cp[i] * x[i + 1];
-    }
 
     return x;
 }
@@ -999,6 +977,66 @@ double totalEnergy(
         EXC;
 }
 
+void solveOrbitals(
+    const vector<double>& r,
+    const vector<double>& Veff,
+    vector<AtomicOrbital>& orbitals)
+{
+    for (auto& orbital :
+         orbitals)
+    {
+        const TridiagonalMatrix H =
+            buildHamiltonian(
+                r,
+                Veff,
+                orbital.l);
+
+        orbital.eigenvalue =
+            findEigenvalue(
+                H,
+                orbital.stateIndex);
+
+        orbital.u =
+            inverseIteration(
+                r,
+                H,
+                orbital.eigenvalue,
+                orbital.l,
+                orbital.stateIndex);
+
+        normalizeOrbital(
+            orbital.u);
+
+        orbital.eigenvalue =
+            rayleighQuotient(
+                H,
+                orbital.u);
+    }
+}
+
+double maxDensityDifference(
+    const vector<double>& a,
+    const vector<double>& b)
+{
+    if (a.size() != b.size())
+        throw std::runtime_error(
+            "Densidades incompatibles.");
+
+    double difference = 0.0;
+
+    for (int i = 0; i < N; ++i)
+    {
+        difference =
+            std::max(
+                difference,
+                std::abs(
+                    a[i] -
+                    b[i]));
+    }
+
+    return difference;
+}
+
 AtomResult solveAtom(int Z)
 {
     const vector<double> r =
@@ -1065,6 +1103,8 @@ AtomResult solveAtom(int Z)
     double previousEnergy =
         std::numeric_limits<double>::infinity();
 
+    bool scfConverged = false;
+
     for (int iteration = 1;
          iteration <= MAX_SCF_ITER;
          ++iteration)
@@ -1092,81 +1132,25 @@ AtomResult solveAtom(int Z)
         vector<AtomicOrbital> newOrbitals =
             result.orbitals;
 
-        for (auto& orbital :
-             newOrbitals)
-        {
-            const TridiagonalMatrix H =
-                buildHamiltonian(
-                    r,
-                    Veff,
-                    orbital.l);
+        solveOrbitals(
+            r,
+            Veff,
+            newOrbitals);
 
-            orbital.eigenvalue =
-                findEigenvalue(
-                    H,
-                    orbital.stateIndex);
-
-            orbital.u =
-                inverseIteration(
-                    r,
-                    H,
-                    orbital.eigenvalue,
-                    orbital.l,
-                    orbital.stateIndex);
-
-            orbital.eigenvalue =
-                rayleighQuotient(
-                    H,
-                    orbital.u);
-        }
-
-        const vector<double> outputDensity =
+        const vector<double> newDensity =
             buildDensity(
                 r,
                 newOrbitals);
 
-        vector<double> mixedDensity(N);
+        const double densityResidual =
+            maxDensityDifference(
+                density,
+                newDensity);
 
-        double densityResidual = 0.0;
-
-        for (int i = 0; i < N; ++i)
-        {
-            mixedDensity[i] =
-                (1.0 - MIXING) *
-                density[i] +
-                MIXING *
-                outputDensity[i];
-
-            densityResidual =
-                std::max(
-                    densityResidual,
-                    std::abs(
-                        mixedDensity[i] -
-                        density[i]));
-        }
-
-        density =
-            std::move(mixedDensity);
-
-        const vector<double> finalVh =
+        const vector<double> newVh =
             hartreePotential(
                 r,
-                density);
-
-        const vector<double> finalVxc =
-            exchangeCorrelationPotential(
-                density);
-
-        vector<double> finalVeff(N);
-
-        for (int i = 0; i < N; ++i)
-        {
-            finalVeff[i] =
-                -static_cast<double>(Z) /
-                r[i] +
-                finalVh[i] +
-                finalVxc[i];
-        }
+                newDensity);
 
         const double Ts =
             kineticEnergy(
@@ -1182,13 +1166,13 @@ AtomResult solveAtom(int Z)
         const double EH =
             hartreeEnergy(
                 r,
-                density,
-                finalVh);
+                newDensity,
+                newVh);
 
         const double EXC =
             exchangeCorrelationEnergy(
                 r,
-                density);
+                newDensity);
 
         const double E =
             totalEnergy(
@@ -1204,11 +1188,16 @@ AtomResult solveAtom(int Z)
                 previousEnergy)
             : std::numeric_limits<double>::infinity();
 
-        const double ksResidual =
-            maxKSResidual(
-                r,
-                finalVeff,
-                newOrbitals);
+        vector<double> mixedDensity(N);
+
+        for (int i = 0; i < N; ++i)
+        {
+            mixedDensity[i] =
+                (1.0 - MIXING) *
+                density[i] +
+                MIXING *
+                newDensity[i];
+        }
 
         result.orbitals =
             std::move(newOrbitals);
@@ -1231,7 +1220,7 @@ AtomResult solveAtom(int Z)
         result.electronNumber =
             electronNumber(
                 r,
-                density);
+                newDensity);
 
         result.densityResidual =
             densityResidual;
@@ -1239,25 +1228,143 @@ AtomResult solveAtom(int Z)
         result.energyResidual =
             energyResidual;
 
-        result.ksResidual =
-            ksResidual;
-
         result.iterations =
             iteration;
 
-        if (densityResidual < DENSITY_TOL &&
-            energyResidual < ENERGY_TOL &&
-            ksResidual < KS_RESIDUAL_TOL)
-        {
-            result.converged =
-                true;
+        density =
+            std::move(mixedDensity);
 
+        if (densityResidual < DENSITY_TOL &&
+            energyResidual < ENERGY_TOL)
+        {
+            scfConverged = true;
             break;
         }
 
         previousEnergy =
             E;
     }
+
+    const vector<double> finalVh =
+        hartreePotential(
+            r,
+            density);
+
+    const vector<double> finalVxc =
+        exchangeCorrelationPotential(
+            density);
+
+    vector<double> finalVeff(N);
+
+    for (int i = 0; i < N; ++i)
+    {
+        finalVeff[i] =
+            -static_cast<double>(Z) /
+            r[i] +
+            finalVh[i] +
+            finalVxc[i];
+    }
+
+    vector<AtomicOrbital> finalOrbitals =
+        result.orbitals;
+
+    solveOrbitals(
+        r,
+        finalVeff,
+        finalOrbitals);
+
+    const vector<double> finalDensity =
+        buildDensity(
+            r,
+            finalOrbitals);
+
+    const double finalDensityResidual =
+        maxDensityDifference(
+            density,
+            finalDensity);
+
+    const vector<double> consistentVh =
+        hartreePotential(
+            r,
+            finalDensity);
+
+    const double Ts =
+        kineticEnergy(
+            r,
+            finalOrbitals);
+
+    const double Eext =
+        externalEnergy(
+            r,
+            Z,
+            finalOrbitals);
+
+    const double EH =
+        hartreeEnergy(
+            r,
+            finalDensity,
+            consistentVh);
+
+    const double EXC =
+        exchangeCorrelationEnergy(
+            r,
+            finalDensity);
+
+    result.orbitals =
+        std::move(finalOrbitals);
+
+    result.totalEnergy =
+        totalEnergy(
+            Ts,
+            Eext,
+            EH,
+            EXC);
+
+    result.kineticEnergy =
+        Ts;
+
+    result.externalEnergy =
+        Eext;
+
+    result.hartreeEnergy =
+        EH;
+
+    result.xcEnergy =
+        EXC;
+
+    result.electronNumber =
+        electronNumber(
+            r,
+            finalDensity);
+
+    result.densityResidual =
+        finalDensityResidual;
+
+    vector<double> consistentVxc =
+        exchangeCorrelationPotential(
+            finalDensity);
+
+    vector<double> consistentPotential(N);
+
+    for (int i = 0; i < N; ++i)
+    {
+        consistentPotential[i] =
+            -static_cast<double>(Z) /
+            r[i] +
+            consistentVh[i] +
+            consistentVxc[i];
+    }
+
+    result.ksResidual =
+        maxKSResidual(
+            r,
+            consistentPotential,
+            result.orbitals);
+
+    result.converged =
+        scfConverged &&
+        result.densityResidual < DENSITY_TOL &&
+        result.ksResidual < KS_RESIDUAL_TOL;
 
     return result;
 }
@@ -1270,8 +1377,7 @@ double hydrogenCoulombEnergy()
     vector<double> V(N);
 
     for (int i = 0; i < N; ++i)
-        V[i] =
-            -1.0 / r[i];
+        V[i] = -1.0 / r[i];
 
     const TridiagonalMatrix H =
         buildHamiltonian(
@@ -1308,20 +1414,18 @@ bool validateOrbitalNorms(
 bool validateElectronCount(
     const AtomResult& atom)
 {
-    int configurationCount = 0;
+    int count = 0;
 
     for (const auto& orbital :
          atom.orbitals)
     {
-        configurationCount +=
+        count +=
             static_cast<int>(
                 std::round(
                     orbital.occupation));
     }
 
-    return
-        configurationCount ==
-        atom.electrons;
+    return count == atom.electrons;
 }
 
 bool validateNumericalElectronNumber(
@@ -1480,61 +1584,37 @@ int main()
             << std::left
             << std::setw(34)
             << "Solver Coulomb H"
-            << (
-                hSolverPass
-                ? "PASS"
-                : "FAIL"
-            )
+            << (hSolverPass ? "PASS" : "FAIL")
             << '\n';
 
         std::cout
             << std::setw(34)
             << "SCF H-C"
-            << (
-                scfPass
-                ? "PASS"
-                : "FAIL"
-            )
+            << (scfPass ? "PASS" : "FAIL")
             << '\n';
 
         std::cout
             << std::setw(34)
             << "Numero de electrones"
-            << (
-                electronPass
-                ? "PASS"
-                : "FAIL"
-            )
+            << (electronPass ? "PASS" : "FAIL")
             << '\n';
 
         std::cout
             << std::setw(34)
             << "Numero electronico numerico"
-            << (
-                numericalElectronPass
-                ? "PASS"
-                : "FAIL"
-            )
+            << (numericalElectronPass ? "PASS" : "FAIL")
             << '\n';
 
         std::cout
             << std::setw(34)
             << "Normas orbitales"
-            << (
-                normPass
-                ? "PASS"
-                : "FAIL"
-            )
+            << (normPass ? "PASS" : "FAIL")
             << '\n';
 
         std::cout
             << std::setw(34)
             << "Descomposicion energetica"
-            << (
-                energyPass
-                ? "PASS"
-                : "FAIL"
-            )
+            << (energyPass ? "PASS" : "FAIL")
             << '\n';
 
         std::cout
