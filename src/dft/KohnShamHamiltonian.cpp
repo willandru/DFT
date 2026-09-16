@@ -34,7 +34,8 @@ TridiagonalMatrix buildKohnShamHamiltonian(
         );
     }
 
-    const double dr = r[1] - r[0];
+    const double dr =
+        r[1] - r[0];
 
     if (dr <= 0.0) {
         throw std::invalid_argument(
@@ -43,16 +44,30 @@ TridiagonalMatrix buildKohnShamHamiltonian(
     }
 
     TridiagonalMatrix matrix;
+
     matrix.lower.resize(n - 1);
     matrix.diagonal.resize(n);
     matrix.upper.resize(n - 1);
 
-    const double kineticDiagonal = 1.0 / (dr * dr);
-    const double kineticOffDiagonal = -0.5 / (dr * dr);
-    const double centrifugalCoefficient =
-        0.5 * static_cast<double>(l * (l + 1));
+    const double inverseDrSquared =
+        1.0 / (dr * dr);
 
-    for (std::size_t i = 0; i < n; ++i) {
+    const double kineticDiagonal =
+        inverseDrSquared;
+
+    const double kineticOffDiagonal =
+        -0.5 * inverseDrSquared;
+
+    const double centrifugalCoefficient =
+        0.5 *
+        static_cast<double>(
+            l * (l + 1)
+        );
+
+    for (std::size_t i = 0;
+         i < n;
+         ++i) {
+
         const double ri = r[i];
 
         if (ri <= 0.0) {
@@ -62,7 +77,8 @@ TridiagonalMatrix buildKohnShamHamiltonian(
         }
 
         const double centrifugal =
-            centrifugalCoefficient / (ri * ri);
+            centrifugalCoefficient /
+            (ri * ri);
 
         matrix.diagonal[i] =
             kineticDiagonal +
@@ -70,9 +86,15 @@ TridiagonalMatrix buildKohnShamHamiltonian(
             effectivePotential[i];
     }
 
-    for (std::size_t i = 0; i < n - 1; ++i) {
-        matrix.lower[i] = kineticOffDiagonal;
-        matrix.upper[i] = kineticOffDiagonal;
+    for (std::size_t i = 0;
+         i < n - 1;
+         ++i) {
+
+        matrix.lower[i] =
+            kineticOffDiagonal;
+
+        matrix.upper[i] =
+            kineticOffDiagonal;
     }
 
     return matrix;

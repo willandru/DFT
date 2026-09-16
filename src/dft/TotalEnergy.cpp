@@ -167,11 +167,38 @@ double calculateExternalEnergy(
 
 EnergyComponents calculateTotalEnergy(
     const std::vector<double>& r,
-    const std::vector<double>& density,
+    const std::vector<double>& alphaDensity,
+    const std::vector<double>& betaDensity,
     const std::vector<AtomicOrbital>& orbitals,
     const std::vector<double>& hartreePotential,
     int Z
 ) {
+    if (alphaDensity.size() != betaDensity.size()) {
+        throw std::invalid_argument(
+            "Las densidades alpha y beta deben tener el mismo tamano."
+        );
+    }
+
+    if (r.size() != alphaDensity.size()) {
+        throw std::invalid_argument(
+            "La malla radial y las densidades deben tener el mismo tamano."
+        );
+    }
+
+    std::vector<double> density(
+        r.size(),
+        0.0
+    );
+
+    for (std::size_t i = 0;
+         i < r.size();
+         ++i) {
+
+        density[i] =
+            alphaDensity[i] +
+            betaDensity[i];
+    }
+
     EnergyComponents energy;
 
     energy.kinetic =
@@ -195,9 +222,10 @@ EnergyComponents calculateTotalEnergy(
         );
 
     energy.exchangeCorrelation =
-        calculateExchangeCorrelationEnergy(
+        calculateSpinExchangeCorrelationEnergy(
             r,
-            density
+            alphaDensity,
+            betaDensity
         );
 
     energy.total =

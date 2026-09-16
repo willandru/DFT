@@ -4,6 +4,12 @@
 
 #include <vector>
 
+std::vector<double> calculateSpinDensity(
+    const std::vector<double>& r,
+    const std::vector<AtomicOrbital>& orbitals,
+    SpinChannel spin
+);
+
 std::vector<double> calculateElectronDensity(
     const std::vector<double>& r,
     const std::vector<AtomicOrbital>& orbitals

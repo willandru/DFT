@@ -5,9 +5,10 @@
 #include <cmath>
 #include <stdexcept>
 
-std::vector<double> calculateElectronDensity(
+std::vector<double> calculateSpinDensity(
     const std::vector<double>& r,
-    const std::vector<AtomicOrbital>& orbitals
+    const std::vector<AtomicOrbital>& orbitals,
+    SpinChannel spin
 ) {
     if (r.empty()) {
         throw std::invalid_argument(
@@ -27,14 +28,11 @@ std::vector<double> calculateElectronDensity(
             );
         }
 
-        if (orbital.electrons <= 0) {
+        if (orbital.spin != spin || orbital.electrons <= 0) {
             continue;
         }
 
-        for (std::size_t i = 0;
-             i < r.size();
-             ++i) {
-
+        for (std::size_t i = 0; i < r.size(); ++i) {
             if (r[i] <= 0.0) {
                 throw std::invalid_argument(
                     "Los puntos radiales deben ser mayores que cero."
@@ -52,6 +50,38 @@ std::vector<double> calculateElectronDensity(
                     r[i]
                 );
         }
+    }
+
+    return density;
+}
+
+std::vector<double> calculateElectronDensity(
+    const std::vector<double>& r,
+    const std::vector<AtomicOrbital>& orbitals
+) {
+    const std::vector<double> alphaDensity =
+        calculateSpinDensity(
+            r,
+            orbitals,
+            SpinChannel::Alpha
+        );
+
+    const std::vector<double> betaDensity =
+        calculateSpinDensity(
+            r,
+            orbitals,
+            SpinChannel::Beta
+        );
+
+    std::vector<double> density(
+        r.size(),
+        0.0
+    );
+
+    for (std::size_t i = 0; i < r.size(); ++i) {
+        density[i] =
+            alphaDensity[i] +
+            betaDensity[i];
     }
 
     return density;
@@ -92,10 +122,7 @@ double integrateElectronDensity(
 
     double electrons = 0.0;
 
-    for (std::size_t i = 0;
-         i < r.size();
-         ++i) {
-
+    for (std::size_t i = 0; i < r.size(); ++i) {
         electrons +=
             4.0 *
             DFTConstants::PI *

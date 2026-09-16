@@ -14,19 +14,38 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
 
-std::vector<AtomicOrbital> solveOrbitals(
+constexpr double MIN_MIXING = 0.10;
+constexpr double MAX_MIXING = 0.50;
+constexpr double MIXING_INCREASE = 1.10;
+constexpr double MIXING_DECREASE = 0.50;
+constexpr double OSCILLATION_FACTOR = 1.05;
+
+std::vector<AtomicOrbital> solveSpinOrbitals(
     const std::vector<double>& r,
     const std::vector<double>& effectivePotential,
-    const AtomicConfiguration& configuration
+    const AtomicConfiguration& configuration,
+    SpinChannel spin
 ) {
     std::vector<AtomicOrbital> orbitals;
     std::map<int, std::size_t> orbitalIndices;
 
-    for (const ElectronicState& state : configuration.states) {
+    for (const ElectronicState& state :
+         configuration.states) {
+
+        const int electrons =
+            spin == SpinChannel::Alpha
+                ? state.alphaElectrons
+                : state.betaElectrons;
+
+        if (electrons <= 0) {
+            continue;
+        }
+
         const TridiagonalMatrix hamiltonian =
             buildKohnShamHamiltonian(
                 r,
@@ -37,24 +56,61 @@ std::vector<AtomicOrbital> solveOrbitals(
         const std::size_t stateIndex =
             orbitalIndices[state.l]++;
 
-        orbitals.push_back(
+        AtomicOrbital orbital =
             solveOrbital(
                 hamiltonian,
                 r,
                 state.n,
                 state.l,
-                state.electrons,
+                electrons,
                 stateIndex
-            )
+            );
+
+        orbital.spin = spin;
+
+        orbitals.push_back(
+            std::move(orbital)
         );
     }
 
     return orbitals;
 }
 
+std::vector<AtomicOrbital> solveAllSpinOrbitals(
+    const std::vector<double>& r,
+    const std::vector<double>& alphaPotential,
+    const std::vector<double>& betaPotential,
+    const AtomicConfiguration& configuration
+) {
+    std::vector<AtomicOrbital> orbitals =
+        solveSpinOrbitals(
+            r,
+            alphaPotential,
+            configuration,
+            SpinChannel::Alpha
+        );
+
+    const std::vector<AtomicOrbital> betaOrbitals =
+        solveSpinOrbitals(
+            r,
+            betaPotential,
+            configuration,
+            SpinChannel::Beta
+        );
+
+    orbitals.insert(
+        orbitals.end(),
+        betaOrbitals.begin(),
+        betaOrbitals.end()
+    );
+
+    return orbitals;
+}
+
 double calculateMaximumKSResidual(
     const std::vector<double>& r,
-    const std::vector<double>& effectivePotential,
+    const std::vector<double>& alphaPotential,
+    const std::vector<double>& betaPotential,
     const std::vector<AtomicOrbital>& orbitals
 ) {
     if (r.size() < 2) {
@@ -63,7 +119,16 @@ double calculateMaximumKSResidual(
         );
     }
 
-    const double dr = r[1] - r[0];
+    if (alphaPotential.size() != r.size() ||
+        betaPotential.size() != r.size()) {
+
+        throw std::invalid_argument(
+            "Los potenciales spin y la malla radial deben tener el mismo tamano."
+        );
+    }
+
+    const double dr =
+        r[1] - r[0];
 
     if (dr <= 0.0) {
         throw std::invalid_argument(
@@ -80,6 +145,11 @@ double calculateMaximumKSResidual(
             );
         }
 
+        const std::vector<double>& effectivePotential =
+            orbital.spin == SpinChannel::Alpha
+                ? alphaPotential
+                : betaPotential;
+
         const TridiagonalMatrix hamiltonian =
             buildKohnShamHamiltonian(
                 r,
@@ -89,7 +159,10 @@ double calculateMaximumKSResidual(
 
         double residualNorm = 0.0;
 
-        for (std::size_t i = 0; i < r.size(); ++i) {
+        for (std::size_t i = 0;
+             i < r.size();
+             ++i) {
+
             double value =
                 hamiltonian.diagonal[i] *
                 orbital.u[i];
@@ -130,80 +203,329 @@ double calculateMaximumKSResidual(
     return maximumResidual;
 }
 
-std::vector<double> buildInitialDensity(
+void buildInitialSpinOrbitals(
     const std::vector<double>& r,
-    const AtomicConfiguration& configuration
+    const AtomicConfiguration& configuration,
+    std::vector<AtomicOrbital>& alphaOrbitals,
+    std::vector<AtomicOrbital>& betaOrbitals
 ) {
-    std::vector<AtomicOrbital> orbitals;
+    alphaOrbitals.clear();
+    betaOrbitals.clear();
 
-    for (const ElectronicState& state : configuration.states) {
-        AtomicOrbital orbital;
-        orbital.n = state.n;
-        orbital.l = state.l;
-        orbital.electrons = state.electrons;
-        orbital.u.resize(r.size());
-
-        const double scale =
-            std::max(
-                0.1,
-                static_cast<double>(state.n) /
-                static_cast<double>(configuration.Z)
-            );
-
-        for (std::size_t i = 0; i < r.size(); ++i) {
-            const double x =
-                r[i] / scale;
-
-            orbital.u[i] =
-                std::pow(
-                    r[i],
-                    state.l + 1
-                ) *
-                std::exp(-x);
-        }
-
-        normalizeVector(
-            orbital.u,
-            r[1] - r[0]
+    const double Z =
+        static_cast<double>(
+            configuration.Z
         );
 
-        orbitals.push_back(
-            std::move(orbital)
+    for (const ElectronicState& state :
+         configuration.states) {
+
+        const double exponent =
+            std::max(
+                0.15,
+                Z /
+                (
+                    static_cast<double>(state.n) *
+                    static_cast<double>(state.n)
+                )
+            );
+
+        if (state.alphaElectrons > 0) {
+            AtomicOrbital orbital;
+
+            orbital.n = state.n;
+            orbital.l = state.l;
+            orbital.spin = SpinChannel::Alpha;
+            orbital.electrons =
+                state.alphaElectrons;
+
+            orbital.u.resize(
+                r.size()
+            );
+
+            for (std::size_t i = 0;
+                 i < r.size();
+                 ++i) {
+
+                orbital.u[i] =
+                    std::pow(
+                        r[i],
+                        state.l + 1
+                    ) *
+                    std::exp(
+                        -exponent * r[i]
+                    );
+            }
+
+            normalizeVector(
+                orbital.u,
+                r[1] - r[0]
+            );
+
+            alphaOrbitals.push_back(
+                std::move(orbital)
+            );
+        }
+
+        if (state.betaElectrons > 0) {
+            AtomicOrbital orbital;
+
+            orbital.n = state.n;
+            orbital.l = state.l;
+            orbital.spin = SpinChannel::Beta;
+            orbital.electrons =
+                state.betaElectrons;
+
+            orbital.u.resize(
+                r.size()
+            );
+
+            for (std::size_t i = 0;
+                 i < r.size();
+                 ++i) {
+
+                orbital.u[i] =
+                    std::pow(
+                        r[i],
+                        state.l + 1
+                    ) *
+                    std::exp(
+                        -exponent * r[i]
+                    );
+            }
+
+            normalizeVector(
+                orbital.u,
+                r[1] - r[0]
+            );
+
+            betaOrbitals.push_back(
+                std::move(orbital)
+            );
+        }
+    }
+}
+
+void buildInitialSpinDensities(
+    const std::vector<double>& r,
+    const AtomicConfiguration& configuration,
+    std::vector<double>& alphaDensity,
+    std::vector<double>& betaDensity
+) {
+    std::vector<AtomicOrbital> alphaOrbitals;
+    std::vector<AtomicOrbital> betaOrbitals;
+
+    buildInitialSpinOrbitals(
+        r,
+        configuration,
+        alphaOrbitals,
+        betaOrbitals
+    );
+
+    alphaDensity =
+        calculateSpinDensity(
+            r,
+            alphaOrbitals,
+            SpinChannel::Alpha
+        );
+
+    betaDensity =
+        calculateSpinDensity(
+            r,
+            betaOrbitals,
+            SpinChannel::Beta
+        );
+}
+
+void buildEffectivePotentials(
+    const std::vector<double>& r,
+    const std::vector<double>& alphaDensity,
+    const std::vector<double>& betaDensity,
+    int Z,
+    std::vector<double>& alphaPotential,
+    std::vector<double>& betaPotential
+) {
+    if (alphaDensity.size() != betaDensity.size() ||
+        alphaDensity.size() != r.size()) {
+
+        throw std::invalid_argument(
+            "La malla y las densidades spin deben tener el mismo tamano."
         );
     }
 
-    return calculateElectronDensity(
-        r,
-        orbitals
+    std::vector<double> density(
+        r.size(),
+        0.0
     );
-}
 
-std::vector<double> buildEffectivePotential(
-    const std::vector<double>& r,
-    const std::vector<double>& density,
-    int Z
-) {
+    for (std::size_t i = 0;
+         i < r.size();
+         ++i) {
+
+        density[i] =
+            alphaDensity[i] +
+            betaDensity[i];
+    }
+
     const std::vector<double> hartree =
         calculateHartreePotential(
             r,
             density
         );
 
-    const std::vector<double> exchangeCorrelation =
-        calculateExchangeCorrelationPotential(
-            density
+    alphaPotential =
+        calculateSpinExchangeCorrelationPotential(
+            alphaDensity,
+            betaDensity,
+            0
         );
 
-    std::vector<double> potential(r.size());
+    betaPotential =
+        calculateSpinExchangeCorrelationPotential(
+            alphaDensity,
+            betaDensity,
+            1
+        );
 
-    for (std::size_t i = 0; i < r.size(); ++i) {
-        potential[i] =
-            -static_cast<double>(Z) / r[i] +
-            hartree[i] +
-            exchangeCorrelation[i];
+    for (std::size_t i = 0;
+         i < r.size();
+         ++i) {
+
+        const double nuclearPotential =
+            -static_cast<double>(Z) /
+            r[i];
+
+        alphaPotential[i] +=
+            nuclearPotential +
+            hartree[i];
+
+        betaPotential[i] +=
+            nuclearPotential +
+            hartree[i];
+    }
+}
+
+double calculateDensityDifference(
+    const std::vector<double>& r,
+    const std::vector<double>& oldDensity,
+    const std::vector<double>& newDensity
+) {
+    if (r.size() != oldDensity.size() ||
+        r.size() != newDensity.size()) {
+
+        throw std::invalid_argument(
+            "La malla y las densidades deben tener el mismo tamano."
+        );
     }
 
-    return potential;
+    if (r.size() < 2) {
+        throw std::invalid_argument(
+            "La malla radial debe contener al menos dos puntos."
+        );
+    }
+
+    const double dr =
+        r[1] - r[0];
+
+    if (dr <= 0.0) {
+        throw std::invalid_argument(
+            "El paso radial debe ser mayor que cero."
+        );
+    }
+
+    double differenceNormSquared = 0.0;
+    double densityNormSquared = 0.0;
+
+    for (std::size_t i = 0;
+         i < r.size();
+         ++i) {
+
+        const double weight =
+            4.0 *
+            DFTConstants::PI *
+            r[i] *
+            r[i];
+
+        const double difference =
+            newDensity[i] -
+            oldDensity[i];
+
+        differenceNormSquared +=
+            difference *
+            difference *
+            weight;
+
+        densityNormSquared +=
+            newDensity[i] *
+            newDensity[i] *
+            weight;
+    }
+
+    const double differenceNorm =
+        std::sqrt(
+            differenceNormSquared * dr
+        );
+
+    const double densityNorm =
+        std::sqrt(
+            densityNormSquared * dr
+        );
+
+    if (densityNorm <= DFTConstants::EPS) {
+        return differenceNorm;
+    }
+
+    return differenceNorm / densityNorm;
+}
+
+double calculateSpinDensityDifference(
+    const std::vector<double>& r,
+    const std::vector<double>& oldAlphaDensity,
+    const std::vector<double>& oldBetaDensity,
+    const std::vector<double>& newAlphaDensity,
+    const std::vector<double>& newBetaDensity
+) {
+    const double alphaDifference =
+        calculateDensityDifference(
+            r,
+            oldAlphaDensity,
+            newAlphaDensity
+        );
+
+    const double betaDifference =
+        calculateDensityDifference(
+            r,
+            oldBetaDensity,
+            newBetaDensity
+        );
+
+    return std::max(
+        alphaDifference,
+        betaDifference
+    );
+}
+
+void mixDensity(
+    std::vector<double>& density,
+    const std::vector<double>& output,
+    double mixing
+) {
+    if (density.size() != output.size()) {
+        throw std::invalid_argument(
+            "Las densidades deben tener el mismo tamano."
+        );
+    }
+
+    for (std::size_t i = 0;
+         i < density.size();
+         ++i) {
+
+        density[i] =
+            (1.0 - mixing) *
+            density[i] +
+            mixing *
+            output[i];
+    }
 }
 
 }
@@ -227,14 +549,24 @@ SCFResult solveSelfConsistentField(
         );
     }
 
-    std::vector<double> density =
-        buildInitialDensity(
-            r,
-            configuration
-        );
+    std::vector<double> alphaDensity;
+    std::vector<double> betaDensity;
+
+    buildInitialSpinDensities(
+        r,
+        configuration,
+        alphaDensity,
+        betaDensity
+    );
 
     double previousEnergy =
         std::numeric_limits<double>::infinity();
+
+    double previousDensityDifference =
+        std::numeric_limits<double>::infinity();
+
+    double mixing =
+        DFTConstants::MIXING;
 
     SCFResult result;
 
@@ -242,25 +574,62 @@ SCFResult solveSelfConsistentField(
          iteration <= DFTConstants::MAX_SCF_ITERATIONS;
          ++iteration) {
 
-        const std::vector<double> effectivePotential =
-            buildEffectivePotential(
-                r,
-                density,
-                configuration.Z
-            );
+        std::vector<double> alphaPotential;
+        std::vector<double> betaPotential;
+
+        buildEffectivePotentials(
+            r,
+            alphaDensity,
+            betaDensity,
+            configuration.Z,
+            alphaPotential,
+            betaPotential
+        );
 
         const std::vector<AtomicOrbital> orbitals =
-            solveOrbitals(
+            solveAllSpinOrbitals(
                 r,
-                effectivePotential,
+                alphaPotential,
+                betaPotential,
                 configuration
             );
 
-        const std::vector<double> outputDensity =
-            calculateElectronDensity(
+        const std::vector<double> outputAlphaDensity =
+            calculateSpinDensity(
                 r,
-                orbitals
+                orbitals,
+                SpinChannel::Alpha
             );
+
+        const std::vector<double> outputBetaDensity =
+            calculateSpinDensity(
+                r,
+                orbitals,
+                SpinChannel::Beta
+            );
+
+        std::vector<double> oldDensity(
+            r.size(),
+            0.0
+        );
+
+        std::vector<double> outputDensity(
+            r.size(),
+            0.0
+        );
+
+        for (std::size_t i = 0;
+             i < r.size();
+             ++i) {
+
+            oldDensity[i] =
+                alphaDensity[i] +
+                betaDensity[i];
+
+            outputDensity[i] =
+                outputAlphaDensity[i] +
+                outputBetaDensity[i];
+        }
 
         const std::vector<double> hartreePotential =
             calculateHartreePotential(
@@ -271,16 +640,33 @@ SCFResult solveSelfConsistentField(
         const EnergyComponents energy =
             calculateTotalEnergy(
                 r,
-                outputDensity,
+                outputAlphaDensity,
+                outputBetaDensity,
                 orbitals,
                 hartreePotential,
                 configuration.Z
             );
 
         const double densityDifference =
-            maxAbsoluteDifference(
-                density,
+            calculateDensityDifference(
+                r,
+                oldDensity,
                 outputDensity
+            );
+
+        const double spinDensityDifference =
+            calculateSpinDensityDifference(
+                r,
+                alphaDensity,
+                betaDensity,
+                outputAlphaDensity,
+                outputBetaDensity
+            );
+
+        const double effectiveDensityDifference =
+            std::max(
+                densityDifference,
+                spinDensityDifference
             );
 
         const double energyDifference =
@@ -294,24 +680,37 @@ SCFResult solveSelfConsistentField(
         const double residual =
             calculateMaximumKSResidual(
                 r,
-                effectivePotential,
+                alphaPotential,
+                betaPotential,
                 orbitals
             );
 
         result.orbitals =
             orbitals;
 
+        result.alphaDensity =
+            outputAlphaDensity;
+
+        result.betaDensity =
+            outputBetaDensity;
+
         result.density =
             outputDensity;
 
+        result.alphaEffectivePotential =
+            alphaPotential;
+
+        result.betaEffectivePotential =
+            betaPotential;
+
         result.effectivePotential =
-            effectivePotential;
+            alphaPotential;
 
         result.energy =
             energy;
 
         result.densityDifference =
-            densityDifference;
+            effectiveDensityDifference;
 
         result.energyDifference =
             energyDifference;
@@ -322,7 +721,7 @@ SCFResult solveSelfConsistentField(
         result.iterations =
             iteration;
 
-        if (densityDifference <
+        if (effectiveDensityDifference <
                 DFTConstants::DENSITY_TOL &&
             energyDifference <
                 DFTConstants::ENERGY_TOL &&
@@ -333,23 +732,42 @@ SCFResult solveSelfConsistentField(
             break;
         }
 
-        std::vector<double> mixedDensity(
-            density.size()
-        );
+        if (std::isfinite(previousDensityDifference)) {
+            if (effectiveDensityDifference >
+                previousDensityDifference *
+                OSCILLATION_FACTOR) {
 
-        for (std::size_t i = 0;
-             i < density.size();
-             ++i) {
+                mixing =
+                    std::max(
+                        MIN_MIXING,
+                        mixing * MIXING_DECREASE
+                    );
+            }
+            else if (effectiveDensityDifference <
+                     previousDensityDifference) {
 
-            mixedDensity[i] =
-                (1.0 - DFTConstants::MIXING) *
-                density[i] +
-                DFTConstants::MIXING *
-                outputDensity[i];
+                mixing =
+                    std::min(
+                        MAX_MIXING,
+                        mixing * MIXING_INCREASE
+                    );
+            }
         }
 
-        density =
-            std::move(mixedDensity);
+        mixDensity(
+            alphaDensity,
+            outputAlphaDensity,
+            mixing
+        );
+
+        mixDensity(
+            betaDensity,
+            outputBetaDensity,
+            mixing
+        );
+
+        previousDensityDifference =
+            effectiveDensityDifference;
 
         previousEnergy =
             energy.total;

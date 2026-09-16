@@ -4,24 +4,31 @@
 #include <string>
 #include <vector>
 
-struct AtomicOrbital {
-    int n = 0;
-    int l = 0;
-    int electrons = 0;
-    double eigenvalue = 0.0;
-    std::vector<double> u;
+enum class SpinChannel {
+    Alpha,
+    Beta
 };
 
 struct ElectronicState {
     int n = 0;
     int l = 0;
-    int electrons = 0;
+    int alphaElectrons = 0;
+    int betaElectrons = 0;
 };
 
 struct AtomicConfiguration {
     int Z = 0;
     std::string symbol;
     std::vector<ElectronicState> states;
+};
+
+struct AtomicOrbital {
+    int n = 0;
+    int l = 0;
+    SpinChannel spin = SpinChannel::Alpha;
+    int electrons = 0;
+    double eigenvalue = 0.0;
+    std::vector<double> u;
 };
 
 struct TridiagonalMatrix {
@@ -40,8 +47,15 @@ struct EnergyComponents {
 
 struct SCFResult {
     std::vector<AtomicOrbital> orbitals;
+
+    std::vector<double> alphaDensity;
+    std::vector<double> betaDensity;
     std::vector<double> density;
+
+    std::vector<double> alphaEffectivePotential;
+    std::vector<double> betaEffectivePotential;
     std::vector<double> effectivePotential;
+
     EnergyComponents energy;
 
     double densityDifference = 0.0;

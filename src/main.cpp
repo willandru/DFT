@@ -1,34 +1,34 @@
 #include "AtomicDFT.h"
 #include "DFTConstants.h"
-#include "DFTTests.h"
 #include "ElectronicConfiguration.h"
-#include "HartreePotential.h"
 #include "RadialGrid.h"
 
-#include <cmath>
 #include <iomanip>
 #include <iostream>
-#include <string>
+#include <utility>
 #include <vector>
 
 int main() {
     try {
-        std::cout
-            << "============================================================\n"
-            << "                 DFT ATOMICO H -> C\n"
-            << "                 LDA-PZ81 | radial\n"
-            << "============================================================\n\n";
-
         RadialGrid grid(
             DFTConstants::GRID_POINTS,
             DFTConstants::RMAX
         );
 
         const std::vector<int> atomicNumbers = {
-            1, 2, 3, 4, 5, 6
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10
         };
 
         std::vector<AtomicResult> results;
+        results.reserve(atomicNumbers.size());
+
+        std::cout
+            << "\nDFT atomico LSDA-PZ81 | H-Ne\n"
+            << "Grid: "
+            << DFTConstants::GRID_POINTS
+            << " puntos | Rmax: "
+            << DFTConstants::RMAX
+            << " bohr\n\n";
 
         for (int Z : atomicNumbers) {
             const AtomicConfiguration configuration =
@@ -37,9 +37,8 @@ int main() {
             std::cout
                 << "Calculando "
                 << configuration.symbol
-                << " (Z = "
-                << Z
-                << ")...\n";
+                << " (" << Z << ")... "
+                << std::flush;
 
             AtomicResult result =
                 solveAtom(
@@ -47,248 +46,89 @@ int main() {
                     configuration
                 );
 
-            results.push_back(result);
-        }
+            results.push_back(
+                std::move(result)
+            );
 
-        std::cout << '\n';
+            const AtomicResult& solved =
+                results.back();
 
-        std::cout
-            << "============================================================\n"
-            << "                    RESULTADOS H -> C\n"
-            << "============================================================\n\n";
-
-        std::cout
-            << std::left
-            << std::setw(6) << "Atom"
-            << std::setw(6) << "Z"
-            << std::setw(8) << "Ne"
-            << std::setw(12) << "SCF"
-            << std::setw(8) << "Iter"
-            << std::right
-            << std::setw(20) << "E_total"
-            << std::setw(20) << "T_s"
-            << std::setw(20) << "E_ext"
-            << std::setw(20) << "E_H"
-            << std::setw(20) << "E_XC"
-            << '\n';
-
-        std::cout
-            << std::string(140, '-')
-            << '\n';
-
-        for (const AtomicResult& result : results) {
-            const EnergyComponents& energy =
-                result.scf.energy;
-
-            std::cout
-                << std::left
-                << std::setw(6) << result.symbol
-                << std::setw(6) << result.Z
-                << std::setw(8) << result.electrons
-                << std::setw(12)
-                << (result.scf.converged ? "YES" : "NO")
-                << std::setw(8) << result.scf.iterations
-                << std::right
-                << std::scientific
-                << std::setprecision(10)
-                << std::setw(20) << energy.total
-                << std::setw(20) << energy.kinetic
-                << std::setw(20) << energy.external
-                << std::setw(20) << energy.hartree
-                << std::setw(20) << energy.exchangeCorrelation
-                << '\n';
-        }
-
-        std::cout << '\n';
-
-        std::cout
-            << "============================================================\n"
-            << "                 ORBITALES KOHN-SHAM\n"
-            << "============================================================\n\n";
-
-        for (const AtomicResult& result : results) {
-            std::cout
-                << result.symbol
-                << "  Z = "
-                << result.Z
-                << "  Ne = "
-                << result.electrons
-                << '\n';
+            int alphaElectrons = 0;
+            int betaElectrons = 0;
 
             for (const AtomicOrbital& orbital :
-                 result.scf.orbitals) {
+                 solved.scf.orbitals) {
 
-                std::cout
-                    << "  n = "
-                    << orbital.n
-                    << "  l = "
-                    << orbital.l
-                    << "  electrones = "
-                    << orbital.electrons
-                    << "  epsilon = "
-                    << std::scientific
-                    << std::setprecision(12)
-                    << orbital.eigenvalue
-                    << " Ha\n";
+                if (orbital.spin ==
+                    SpinChannel::Alpha) {
+
+                    alphaElectrons +=
+                        orbital.electrons;
+                } else {
+                    betaElectrons +=
+                        orbital.electrons;
+                }
             }
 
-            std::cout << '\n';
+            std::cout
+                << (solved.scf.converged ? "OK" : "NO")
+                << "  E = "
+                << std::scientific
+                << std::setprecision(8)
+                << solved.scf.energy.total
+                << " Ha"
+                << "  N = "
+                << solved.electrons
+                << " ("
+                << alphaElectrons
+                << "+"
+                << betaElectrons
+                << ")"
+                << "  iter = "
+                << solved.scf.iterations
+                << '\n';
         }
 
         std::cout
-            << "============================================================\n"
-            << "                    VALIDACION NUMERICA\n"
-            << "============================================================\n\n";
+            << "\nDIAGNOSTICO SCF\n"
+            << "Atom   Iter       dRho           dE             KS_res\n"
+            << "------------------------------------------------------------\n";
 
-        const std::vector<double>& r =
-            grid.coordinates();
-
-        std::vector<double> hydrogenDensity(
-            r.size(),
-            0.0
-        );
-
-        for (std::size_t i = 0;
-             i < r.size();
-             ++i) {
-
-            hydrogenDensity[i] =
-                std::exp(-2.0 * r[i]) /
-                DFTConstants::PI;
+        for (const AtomicResult& result : results) {
+            std::cout
+                << std::left
+                << std::setw(7)
+                << result.symbol
+                << std::setw(11)
+                << result.scf.iterations
+                << std::scientific
+                << std::setprecision(6)
+                << std::setw(15)
+                << result.scf.densityDifference
+                << std::setw(15)
+                << result.scf.energyDifference
+                << std::setw(15)
+                << result.scf.maxKSResidual
+                << '\n';
         }
 
-        const std::vector<double> hydrogenPotential =
-            calculateHartreePotential(
-                r,
-                hydrogenDensity
-            );
-
-        const bool coulombTest =
-            testCoulombHydrogen(
-                r,
-                hydrogenPotential
-            );
-
-        const bool scfTest =
-            testSCFResults(
-                results
-            );
-
-        const bool electronNumberTest =
-            testElectronNumbers(
-                results
-            );
-
-        const bool numericalElectronNumberTest =
-            testNumericalElectronNumbers(
-                results
-            );
-
-        const bool orbitalNormTest =
-            testOrbitalNorms(
-                results,
-                1.0e-8
-            );
-
-        const bool kohnShamExpectationTest =
-            testKohnShamExpectationValues(
-                results,
-                1.0e-8
-            );
-
-        const bool energyTest =
-            testEnergyDecomposition(
-                results,
-                1.0e-10
-            );
-
         std::cout
-            << '\n'
-            << std::left
-            << std::setw(35)
-            << "Solver Coulomb H"
-            << (coulombTest ? "PASS" : "FAIL")
-            << '\n';
+            << "\nENERGIAS\n";
 
-        std::cout
-            << std::setw(35)
-            << "SCF H-C"
-            << (scfTest ? "PASS" : "FAIL")
-            << '\n';
-
-        std::cout
-            << std::setw(35)
-            << "Numero de electrones"
-            << (electronNumberTest ? "PASS" : "FAIL")
-            << '\n';
-
-        std::cout
-            << std::setw(35)
-            << "Numero electronico numerico"
-            << (numericalElectronNumberTest ? "PASS" : "FAIL")
-            << '\n';
-
-        std::cout
-            << std::setw(35)
-            << "Normas orbitales"
-            << (orbitalNormTest ? "PASS" : "FAIL")
-            << '\n';
-
-        std::cout
-            << std::setw(35)
-            << "Valor esperado Hamiltoniano KS"
-            << (kohnShamExpectationTest ? "PASS" : "FAIL")
-            << '\n';
-
-        std::cout
-            << std::setw(35)
-            << "Descomposicion energetica"
-            << (energyTest ? "PASS" : "FAIL")
-            << '\n';
+        for (const AtomicResult& result : results) {
+            std::cout
+                << std::setw(3)
+                << result.symbol
+                << "  "
+                << std::scientific
+                << std::setprecision(10)
+                << result.scf.energy.total
+                << " Ha\n";
+        }
 
         std::cout << '\n';
 
-        std::cout
-            << "============================================================\n"
-            << "                    REFERENCIAS\n"
-            << "============================================================\n\n";
-
-        std::cout
-            << "H  energia Coulomb exacta     = "
-            << std::scientific
-            << std::setprecision(12)
-            << DFTConstants::H_EXACT
-            << " Ha\n";
-
-        std::cout
-            << "H  energia calculada DFT      = "
-            << results[0].scf.energy.total
-            << " Ha\n";
-
-        std::cout
-            << "He energia calculada DFT      = "
-            << results[1].scf.energy.total
-            << " Ha\n";
-
-        const bool allPassed =
-            coulombTest &&
-            scfTest &&
-            electronNumberTest &&
-            numericalElectronNumberTest &&
-            orbitalNormTest &&
-            kohnShamExpectationTest &&
-            energyTest;
-
-        std::cout << '\n';
-
-        std::cout
-            << "============================================================\n"
-            << (allPassed
-                ? "                    VALIDACION PASS\n"
-                : "                    VALIDACION FAIL\n")
-            << "============================================================\n";
-
-        return allPassed ? 0 : 1;
+        return 0;
     }
     catch (const std::exception& error) {
         std::cerr

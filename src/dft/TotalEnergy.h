@@ -17,7 +17,8 @@ double calculateExternalEnergy(
 
 EnergyComponents calculateTotalEnergy(
     const std::vector<double>& r,
-    const std::vector<double>& density,
+    const std::vector<double>& alphaDensity,
+    const std::vector<double>& betaDensity,
     const std::vector<AtomicOrbital>& orbitals,
     const std::vector<double>& hartreePotential,
     int Z
