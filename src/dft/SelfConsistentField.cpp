@@ -185,7 +185,8 @@ double calculateMaximumKSResidual(
                 orbital.u[i];
 
             residualNorm +=
-                residual * residual;
+                residual *
+                residual;
         }
 
         residualNorm =
@@ -342,6 +343,7 @@ void buildEffectivePotentials(
     const std::vector<double>& alphaDensity,
     const std::vector<double>& betaDensity,
     int Z,
+    const XCFunctional& functional,
     std::vector<double>& alphaPotential,
     std::vector<double>& betaPotential
 ) {
@@ -375,6 +377,7 @@ void buildEffectivePotentials(
 
     alphaPotential =
         calculateSpinExchangeCorrelationPotential(
+            functional,
             alphaDensity,
             betaDensity,
             0
@@ -382,6 +385,7 @@ void buildEffectivePotentials(
 
     betaPotential =
         calculateSpinExchangeCorrelationPotential(
+            functional,
             alphaDensity,
             betaDensity,
             1
@@ -532,7 +536,8 @@ void mixDensity(
 
 SCFResult solveSelfConsistentField(
     const RadialGrid& grid,
-    const AtomicConfiguration& configuration
+    const AtomicConfiguration& configuration,
+    const XCFunctional& functional
 ) {
     const std::vector<double>& r =
         grid.coordinates();
@@ -582,6 +587,7 @@ SCFResult solveSelfConsistentField(
             alphaDensity,
             betaDensity,
             configuration.Z,
+            functional,
             alphaPotential,
             betaPotential
         );
@@ -639,6 +645,7 @@ SCFResult solveSelfConsistentField(
 
         const EnergyComponents energy =
             calculateTotalEnergy(
+                functional,
                 r,
                 outputAlphaDensity,
                 outputBetaDensity,

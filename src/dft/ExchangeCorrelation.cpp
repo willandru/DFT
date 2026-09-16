@@ -1,13 +1,12 @@
 #include "ExchangeCorrelation.h"
 
 #include "DFTConstants.h"
-#include "PZ81.h"
 
-#include <algorithm>
 #include <stdexcept>
 #include <vector>
 
 std::vector<double> calculateSpinExchangeCorrelationPotential(
+    const XCFunctional& functional,
     const std::vector<double>& alphaDensity,
     const std::vector<double>& betaDensity,
     int spin
@@ -23,8 +22,6 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
             "Las densidades alpha y beta deben tener el mismo tamano."
         );
     }
-
-    PZ81 functional;
 
     std::vector<double> potential(
         alphaDensity.size(),
@@ -54,6 +51,7 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
 }
 
 double calculateSpinExchangeCorrelationEnergy(
+    const XCFunctional& functional,
     const std::vector<double>& r,
     const std::vector<double>& alphaDensity,
     const std::vector<double>& betaDensity
@@ -80,8 +78,6 @@ double calculateSpinExchangeCorrelationEnergy(
             "El paso radial debe ser mayor que cero."
         );
     }
-
-    PZ81 functional;
 
     double energy = 0.0;
 

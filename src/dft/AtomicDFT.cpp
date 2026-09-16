@@ -6,7 +6,8 @@
 
 AtomicResult solveAtom(
     const RadialGrid& grid,
-    const AtomicConfiguration& configuration
+    const AtomicConfiguration& configuration,
+    const XCFunctional& functional
 ) {
     if (configuration.Z <= 0) {
         throw std::invalid_argument(
@@ -33,7 +34,8 @@ AtomicResult solveAtom(
     result.scf =
         solveSelfConsistentField(
             grid,
-            configuration
+            configuration,
+            functional
         );
 
     return result;

@@ -1,6 +1,7 @@
 #include "AtomicDFT.h"
 #include "DFTConstants.h"
 #include "ElectronicConfiguration.h"
+#include "PZ81.h"
 #include "RadialGrid.h"
 
 #include <iomanip>
@@ -14,6 +15,8 @@ int main() {
             DFTConstants::GRID_POINTS,
             DFTConstants::RMAX
         );
+
+        PZ81 pz81;
 
         const std::vector<int> atomicNumbers = {
             1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
@@ -45,7 +48,8 @@ int main() {
             AtomicResult result =
                 solveAtom(
                     grid,
-                    configuration
+                    configuration,
+                    pz81
                 );
 
             results.push_back(
@@ -66,6 +70,7 @@ int main() {
 
                     alphaElectrons +=
                         orbital.electrons;
+
                 } else {
                     betaElectrons +=
                         orbital.electrons;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DFTData.h"
+#include "XCFunctional.h"
 
 #include <vector>
 
@@ -16,6 +17,7 @@ double calculateExternalEnergy(
 );
 
 EnergyComponents calculateTotalEnergy(
+    const XCFunctional& functional,
     const std::vector<double>& r,
     const std::vector<double>& alphaDensity,
     const std::vector<double>& betaDensity,

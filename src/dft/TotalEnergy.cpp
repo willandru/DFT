@@ -156,7 +156,9 @@ double calculateExternalEnergy(
 
             energy +=
                 0.5 * integrand;
+
         } else {
+
             energy +=
                 integrand;
         }
@@ -166,6 +168,7 @@ double calculateExternalEnergy(
 }
 
 EnergyComponents calculateTotalEnergy(
+    const XCFunctional& functional,
     const std::vector<double>& r,
     const std::vector<double>& alphaDensity,
     const std::vector<double>& betaDensity,
@@ -223,6 +226,7 @@ EnergyComponents calculateTotalEnergy(
 
     energy.exchangeCorrelation =
         calculateSpinExchangeCorrelationEnergy(
+            functional,
             r,
             alphaDensity,
             betaDensity
