@@ -26,6 +26,11 @@ bool testOrbitalNorms(
     double tolerance
 );
 
+bool testKohnShamExpectationValues(
+    const std::vector<AtomicResult>& results,
+    double tolerance
+);
+
 bool testEnergyDecomposition(
     const std::vector<AtomicResult>& results,
     double tolerance

@@ -17,13 +17,20 @@ double calculateKineticEnergy(
         );
     }
 
-    const double dr = r[1] - r[0];
+    const double dr =
+        r[1] - r[0];
 
     if (dr <= 0.0) {
         throw std::invalid_argument(
             "El paso radial debe ser mayor que cero."
         );
     }
+
+    const double kineticDiagonal =
+        1.0 / (dr * dr);
+
+    const double kineticOffDiagonal =
+        -0.5 / (dr * dr);
 
     double energy = 0.0;
 
@@ -38,37 +45,55 @@ double calculateKineticEnergy(
             );
         }
 
-        double integral = 0.0;
+        const double centrifugalCoefficient =
+            0.5 *
+            static_cast<double>(
+                orbital.l *
+                (orbital.l + 1)
+            );
 
-        for (std::size_t i = 1; i < r.size() - 1; ++i) {
-            const double secondDerivative =
-                (
-                    orbital.u[i + 1] -
-                    2.0 * orbital.u[i] +
-                    orbital.u[i - 1]
-                ) / (dr * dr);
+        double orbitalEnergy = 0.0;
 
-            const double centrifugal =
-                0.5 *
-                static_cast<double>(
-                    orbital.l * (orbital.l + 1)
-                ) *
-                orbital.u[i] /
-                (r[i] * r[i]);
+        for (std::size_t i = 0;
+             i < r.size();
+             ++i) {
 
-            const double value =
-                orbital.u[i] *
-                (
-                    -0.5 * secondDerivative +
-                    centrifugal
+            if (r[i] <= 0.0) {
+                throw std::invalid_argument(
+                    "Los puntos radiales deben ser mayores que cero."
                 );
+            }
 
-            integral += value;
+            double applied =
+                (
+                    kineticDiagonal +
+                    centrifugalCoefficient /
+                    (r[i] * r[i])
+                ) *
+                orbital.u[i];
+
+            if (i > 0) {
+                applied +=
+                    kineticOffDiagonal *
+                    orbital.u[i - 1];
+            }
+
+            if (i + 1 < r.size()) {
+                applied +=
+                    kineticOffDiagonal *
+                    orbital.u[i + 1];
+            }
+
+            orbitalEnergy +=
+                orbital.u[i] *
+                applied;
         }
 
         energy +=
-            static_cast<double>(orbital.electrons) *
-            integral *
+            static_cast<double>(
+                orbital.electrons
+            ) *
+            orbitalEnergy *
             dr;
     }
 
@@ -98,7 +123,8 @@ double calculateExternalEnergy(
         );
     }
 
-    const double dr = r[1] - r[0];
+    const double dr =
+        r[1] - r[0];
 
     if (dr <= 0.0) {
         throw std::invalid_argument(
@@ -108,7 +134,10 @@ double calculateExternalEnergy(
 
     double energy = 0.0;
 
-    for (std::size_t i = 0; i < r.size(); ++i) {
+    for (std::size_t i = 0;
+         i < r.size();
+         ++i) {
+
         if (r[i] <= 0.0) {
             throw std::invalid_argument(
                 "Los puntos radiales deben ser mayores que cero."
@@ -122,10 +151,14 @@ double calculateExternalEnergy(
             r[i] *
             density[i];
 
-        if (i == 0 || i == r.size() - 1) {
-            energy += 0.5 * integrand;
+        if (i == 0 ||
+            i == r.size() - 1) {
+
+            energy +=
+                0.5 * integrand;
         } else {
-            energy += integrand;
+            energy +=
+                integrand;
         }
     }
 

@@ -34,7 +34,6 @@ bool testCoulombHydrogen(
     for (std::size_t i = 0;
          i < r.size();
          ++i) {
-
         coulombPotential[i] =
             -1.0 / r[i];
     }
@@ -125,7 +124,6 @@ bool testNumericalElectronNumbers(
         for (std::size_t i = 0;
              i < r.size();
              ++i) {
-
             r[i] =
                 static_cast<double>(i + 1) *
                 dr;
@@ -218,6 +216,124 @@ bool testOrbitalNorms(
     }
 
     return true;
+}
+
+bool testKohnShamExpectationValues(
+    const std::vector<AtomicResult>& results,
+    double tolerance
+) {
+    if (results.empty()) {
+        return false;
+    }
+
+    bool passed = true;
+
+    const double dr =
+        DFTConstants::RMAX /
+        static_cast<double>(
+            DFTConstants::GRID_POINTS + 1
+        );
+
+    for (const AtomicResult& result : results) {
+        const std::vector<double>& r =
+            result.scf.density.empty()
+                ? std::vector<double>()
+                : [&]() {
+                    std::vector<double> coordinates(
+                        result.scf.density.size()
+                    );
+
+                    for (std::size_t i = 0;
+                         i < coordinates.size();
+                         ++i) {
+                        coordinates[i] =
+                            static_cast<double>(i + 1) *
+                            dr;
+                    }
+
+                    return coordinates;
+                }();
+
+        if (r.size() != result.scf.effectivePotential.size()) {
+            return false;
+        }
+
+        for (const AtomicOrbital& orbital :
+             result.scf.orbitals) {
+
+            if (orbital.u.size() != r.size()) {
+                return false;
+            }
+
+            const TridiagonalMatrix hamiltonian =
+                buildKohnShamHamiltonian(
+                    r,
+                    result.scf.effectivePotential,
+                    orbital.l
+                );
+
+            double expectationValue = 0.0;
+
+            for (std::size_t i = 0;
+                 i < r.size();
+                 ++i) {
+
+                double value =
+                    hamiltonian.diagonal[i] *
+                    orbital.u[i];
+
+                if (i > 0) {
+                    value +=
+                        hamiltonian.lower[i - 1] *
+                        orbital.u[i - 1];
+                }
+
+                if (i + 1 < r.size()) {
+                    value +=
+                        hamiltonian.upper[i] *
+                        orbital.u[i + 1];
+                }
+
+                expectationValue +=
+                    orbital.u[i] *
+                    value;
+            }
+
+            expectationValue *= dr;
+
+            const double error =
+                std::abs(
+                    expectationValue -
+                    orbital.eigenvalue
+                );
+
+            std::cout
+                << std::scientific
+                << std::setprecision(12)
+                << "Valor esperado KS "
+                << std::setw(2)
+                << result.symbol
+                << " n="
+                << orbital.n
+                << " l="
+                << orbital.l
+                << ": epsilon="
+                << orbital.eigenvalue
+                << " esperado="
+                << expectationValue
+                << " error="
+                << error
+                << " tolerancia="
+                << tolerance
+                << '\n';
+
+            if (error > tolerance) {
+                passed = false;
+            }
+        }
+    }
+
+    return passed;
 }
 
 bool testEnergyDecomposition(

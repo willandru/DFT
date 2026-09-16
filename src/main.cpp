@@ -170,16 +170,28 @@ int main() {
             );
 
         const bool scfTest =
-            testSCFResults(results);
+            testSCFResults(
+                results
+            );
 
         const bool electronNumberTest =
-            testElectronNumbers(results);
+            testElectronNumbers(
+                results
+            );
 
         const bool numericalElectronNumberTest =
-            testNumericalElectronNumbers(results);
+            testNumericalElectronNumbers(
+                results
+            );
 
         const bool orbitalNormTest =
             testOrbitalNorms(
+                results,
+                1.0e-8
+            );
+
+        const bool kohnShamExpectationTest =
+            testKohnShamExpectationValues(
                 results,
                 1.0e-8
             );
@@ -191,6 +203,7 @@ int main() {
             );
 
         std::cout
+            << '\n'
             << std::left
             << std::setw(35)
             << "Solver Coulomb H"
@@ -219,6 +232,12 @@ int main() {
             << std::setw(35)
             << "Normas orbitales"
             << (orbitalNormTest ? "PASS" : "FAIL")
+            << '\n';
+
+        std::cout
+            << std::setw(35)
+            << "Valor esperado Hamiltoniano KS"
+            << (kohnShamExpectationTest ? "PASS" : "FAIL")
             << '\n';
 
         std::cout
@@ -257,6 +276,7 @@ int main() {
             electronNumberTest &&
             numericalElectronNumberTest &&
             orbitalNormTest &&
+            kohnShamExpectationTest &&
             energyTest;
 
         std::cout << '\n';
