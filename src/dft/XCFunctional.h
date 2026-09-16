@@ -1,5 +1,7 @@
 #pragma once
 
+#include "XCInput.h"
+
 struct XCResult {
     double energyPerElectron;
     double potentialAlpha;
@@ -11,7 +13,6 @@ public:
     virtual ~XCFunctional() = default;
 
     virtual XCResult evaluate(
-        double alphaDensity,
-        double betaDensity
+        const XCInput& input
     ) const = 0;
 };

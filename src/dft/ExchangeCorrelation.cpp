@@ -5,8 +5,56 @@
 #include <stdexcept>
 #include <vector>
 
+namespace {
+
+double calculateRadialGradient(
+    const std::vector<double>& r,
+    const std::vector<double>& density,
+    std::size_t i
+) {
+    const std::size_t size =
+        r.size();
+
+    if (i == 0) {
+        return
+            (
+                density[1] -
+                density[0]
+            ) /
+            (
+                r[1] -
+                r[0]
+            );
+    }
+
+    if (i == size - 1) {
+        return
+            (
+                density[size - 1] -
+                density[size - 2]
+            ) /
+            (
+                r[size - 1] -
+                r[size - 2]
+            );
+    }
+
+    return
+        (
+            density[i + 1] -
+            density[i - 1]
+        ) /
+        (
+            r[i + 1] -
+            r[i - 1]
+        );
+}
+
+}
+
 std::vector<double> calculateSpinExchangeCorrelationPotential(
     const XCFunctional& functional,
+    const std::vector<double>& r,
     const std::vector<double>& alphaDensity,
     const std::vector<double>& betaDensity,
     int spin
@@ -17,9 +65,17 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
         );
     }
 
-    if (alphaDensity.size() != betaDensity.size()) {
+    if (r.size() != alphaDensity.size() ||
+        r.size() != betaDensity.size()) {
+
         throw std::invalid_argument(
-            "Las densidades alpha y beta deben tener el mismo tamano."
+            "La malla y las densidades spin deben tener el mismo tamano."
+        );
+    }
+
+    if (r.size() < 2) {
+        throw std::invalid_argument(
+            "Se necesitan al menos dos puntos radiales."
         );
     }
 
@@ -32,10 +88,31 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
          i < alphaDensity.size();
          ++i) {
 
+        XCInput input;
+
+        input.alphaDensity =
+            alphaDensity[i];
+
+        input.betaDensity =
+            betaDensity[i];
+
+        input.alphaGradient =
+            calculateRadialGradient(
+                r,
+                alphaDensity,
+                i
+            );
+
+        input.betaGradient =
+            calculateRadialGradient(
+                r,
+                betaDensity,
+                i
+            );
+
         const XCResult result =
             functional.evaluate(
-                alphaDensity[i],
-                betaDensity[i]
+                input
             );
 
         if (spin == 0) {
@@ -93,10 +170,31 @@ double calculateSpinExchangeCorrelationEnergy(
 
         if (density > DFTConstants::RHO_FLOOR) {
 
+            XCInput input;
+
+            input.alphaDensity =
+                alphaDensity[i];
+
+            input.betaDensity =
+                betaDensity[i];
+
+            input.alphaGradient =
+                calculateRadialGradient(
+                    r,
+                    alphaDensity,
+                    i
+                );
+
+            input.betaGradient =
+                calculateRadialGradient(
+                    r,
+                    betaDensity,
+                    i
+                );
+
             const XCResult result =
                 functional.evaluate(
-                    alphaDensity[i],
-                    betaDensity[i]
+                    input
                 );
 
             epsilonXC =

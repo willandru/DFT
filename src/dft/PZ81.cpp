@@ -435,18 +435,17 @@ double spinExchangeCorrelationPotential(
 }
 
 XCResult PZ81::evaluate(
-    double alphaDensity,
-    double betaDensity
+    const XCInput& input
 ) const {
     const double alpha =
         std::max(
-            alphaDensity,
+            input.alphaDensity,
             0.0
         );
 
     const double beta =
         std::max(
-            betaDensity,
+            input.betaDensity,
             0.0
         );
 

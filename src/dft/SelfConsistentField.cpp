@@ -378,6 +378,7 @@ void buildEffectivePotentials(
     alphaPotential =
         calculateSpinExchangeCorrelationPotential(
             functional,
+            r,
             alphaDensity,
             betaDensity,
             0
@@ -386,6 +387,7 @@ void buildEffectivePotentials(
     betaPotential =
         calculateSpinExchangeCorrelationPotential(
             functional,
+            r,
             alphaDensity,
             betaDensity,
             1
