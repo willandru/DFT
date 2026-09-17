@@ -13,6 +13,7 @@ MolecularOrbital solveMolecularOrbital(
     SpinChannel spin,
     int electrons,
     const std::vector<MolecularOrbital>& previousOrbitals,
+    const MolecularOrbital* initialGuess = nullptr,
     std::size_t maxIterations = 5000
 );
 
@@ -22,5 +23,6 @@ std::vector<MolecularOrbital> solveMolecularOrbitals(
     std::size_t numberOfOrbitals,
     const std::vector<int>& occupations,
     SpinChannel spin,
+    const std::vector<MolecularOrbital>& initialOrbitals = {},
     std::size_t maxIterations = 5000
 );

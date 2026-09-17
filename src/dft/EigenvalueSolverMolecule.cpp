@@ -27,11 +27,26 @@ constexpr double SUBSPACE_ORTHOGONALITY_TOLERANCE_SQUARED =
 constexpr double VECTOR_RECOVERY_TOLERANCE_SQUARED =
     1.0e-20;
 
-constexpr std::size_t MAX_SUBSPACE_DIMENSION = 24;
+/*
+ * Un subespacio mas pequeno reduce el coste de la diagonalizacion
+ * proyectada y, mas importante, limita la cantidad de vectores
+ * grandes que deben combinarse en cada iteracion.
+ *
+ * El metodo Davidson utiliza el residuo preacondicionado para
+ * generar nuevas direcciones, por lo que no necesita crecer hasta
+ * un subespacio tan grande como el metodo anterior.
+ */
+constexpr std::size_t MAX_SUBSPACE_DIMENSION = 16;
 
 constexpr double DENSE_EIGENVALUE_TOLERANCE = 1.0e-13;
 
 constexpr std::size_t DENSE_EIGENVALUE_MAX_ITERATIONS = 10000;
+
+/*
+ * Si el denominador del precondicionador es demasiado pequeno,
+ * se evita una division numericamente inestable.
+ */
+constexpr double DAVIDSON_DENOMINATOR_TOLERANCE = 1.0e-10;
 
 
 /*
@@ -439,31 +454,51 @@ std::vector<double> buildInitialMolecularVector(
             orbitalIndex
         );
 
-    const double sigmaSquared =
-        sigma *
-        sigma;
+    const double inverseTwoSigmaSquared =
+        1.0 /
+        (
+            2.0 *
+            sigma *
+            sigma
+        );
 
     const std::size_t mode =
         orbitalIndex % 9;
 
+    const std::size_t nx =
+        grid.getNx();
+
+    const std::size_t ny =
+        grid.getNy();
+
+    const std::size_t nz =
+        grid.getNz();
+
     for (std::size_t k = 0;
-         k < grid.getNz();
+         k < nz;
          ++k) {
 
         const double z =
             grid.getZ(k) -
             centerZ;
 
+        const std::size_t zOffset =
+            k * nx * ny;
+
         for (std::size_t j = 0;
-             j < grid.getNy();
+             j < ny;
              ++j) {
 
             const double y =
                 grid.getY(j) -
                 centerY;
 
+            const std::size_t rowOffset =
+                zOffset +
+                j * nx;
+
             for (std::size_t i = 0;
-                 i < grid.getNx();
+                 i < nx;
                  ++i) {
 
                 const double x =
@@ -477,11 +512,11 @@ std::vector<double> buildInitialMolecularVector(
 
                 const double gaussian =
                     std::exp(
-                        -radiusSquared /
-                        (2.0 * sigmaSquared)
+                        -radiusSquared *
+                        inverseTwoSigmaSquared
                     );
 
-                double polynomial = 1.0;
+                double polynomial;
 
                 switch (mode) {
 
@@ -502,18 +537,15 @@ std::vector<double> buildInitialMolecularVector(
                     break;
 
                 case 4:
-                    polynomial =
-                        x * y;
+                    polynomial = x * y;
                     break;
 
                 case 5:
-                    polynomial =
-                        x * z;
+                    polynomial = x * z;
                     break;
 
                 case 6:
-                    polynomial =
-                        y * z;
+                    polynomial = y * z;
                     break;
 
                 case 7:
@@ -534,14 +566,7 @@ std::vector<double> buildInitialMolecularVector(
                     break;
                 }
 
-                const std::size_t index =
-                    grid.getIndex(
-                        i,
-                        j,
-                        k
-                    );
-
-                vector[index] =
+                vector[rowOffset + i] =
                     polynomial *
                     gaussian;
             }
@@ -604,8 +629,7 @@ DenseSymmetricEigenpair diagonalizeDenseSymmetricMatrix(
          iteration < DENSE_EIGENVALUE_MAX_ITERATIONS;
          ++iteration) {
 
-        double maximumOffDiagonal =
-            0.0;
+        double maximumOffDiagonal = 0.0;
 
         std::size_t p = 0;
         std::size_t q = 0;
@@ -635,8 +659,7 @@ DenseSymmetricEigenpair diagonalizeDenseSymmetricMatrix(
             }
         }
 
-        double diagonalScale =
-            1.0;
+        double diagonalScale = 1.0;
 
         for (std::size_t i = 0;
              i < n;
@@ -707,11 +730,8 @@ DenseSymmetricEigenpair diagonalizeDenseSymmetricMatrix(
             aqq +
             t * apq;
 
-        matrix[p][q] =
-            0.0;
-
-        matrix[q][p] =
-            0.0;
+        matrix[p][q] = 0.0;
+        matrix[q][p] = 0.0;
 
         for (std::size_t k = 0;
              k < n;
@@ -735,17 +755,11 @@ DenseSymmetricEigenpair diagonalizeDenseSymmetricMatrix(
                 s * akp +
                 c * akq;
 
-            matrix[k][p] =
-                newKp;
+            matrix[k][p] = newKp;
+            matrix[p][k] = newKp;
 
-            matrix[p][k] =
-                newKp;
-
-            matrix[k][q] =
-                newKq;
-
-            matrix[q][k] =
-                newKq;
+            matrix[k][q] = newKq;
+            matrix[q][k] = newKq;
         }
 
         for (std::size_t k = 0;
@@ -768,8 +782,7 @@ DenseSymmetricEigenpair diagonalizeDenseSymmetricMatrix(
         }
     }
 
-    std::size_t minimumIndex =
-        0;
+    std::size_t minimumIndex = 0;
 
     for (std::size_t i = 1;
          i < n;
@@ -778,8 +791,7 @@ DenseSymmetricEigenpair diagonalizeDenseSymmetricMatrix(
         if (matrix[i][i] <
             matrix[minimumIndex][minimumIndex]) {
 
-            minimumIndex =
-                i;
+            minimumIndex = i;
         }
     }
 
@@ -838,9 +850,7 @@ std::vector<double> buildSubspaceVector(
         );
     }
 
-    if (basis.size() !=
-        coefficients.size()) {
-
+    if (basis.size() != coefficients.size()) {
         throw std::invalid_argument(
             "La base y los coeficientes deben "
             "tener el mismo tamano."
@@ -856,13 +866,18 @@ std::vector<double> buildSubspaceVector(
          j < basis.size();
          ++j) {
 
-        if (basis[j].size() !=
-            vector.size()) {
-
+        if (basis[j].size() != vector.size()) {
             throw std::invalid_argument(
                 "Los vectores del subespacio deben "
                 "tener el mismo tamano."
             );
+        }
+
+        const double coefficient =
+            coefficients[j];
+
+        if (coefficient == 0.0) {
+            continue;
         }
 
         for (std::size_t i = 0;
@@ -870,7 +885,7 @@ std::vector<double> buildSubspaceVector(
              ++i) {
 
             vector[i] +=
-                coefficients[j] *
+                coefficient *
                 basis[j][i];
         }
     }
@@ -889,9 +904,7 @@ std::vector<double> buildSubspaceHamiltonianVector(
         );
     }
 
-    if (hBasis.size() !=
-        coefficients.size()) {
-
+    if (hBasis.size() != coefficients.size()) {
         throw std::invalid_argument(
             "H(base) y los coeficientes deben "
             "tener el mismo tamano."
@@ -907,13 +920,18 @@ std::vector<double> buildSubspaceHamiltonianVector(
          j < hBasis.size();
          ++j) {
 
-        if (hBasis[j].size() !=
-            hVector.size()) {
-
+        if (hBasis[j].size() != hVector.size()) {
             throw std::invalid_argument(
                 "Los vectores H(base) deben "
                 "tener el mismo tamano."
             );
+        }
+
+        const double coefficient =
+            coefficients[j];
+
+        if (coefficient == 0.0) {
+            continue;
         }
 
         for (std::size_t i = 0;
@@ -921,7 +939,7 @@ std::vector<double> buildSubspaceHamiltonianVector(
              ++i) {
 
             hVector[i] +=
-                coefficients[j] *
+                coefficient *
                 hBasis[j][i];
         }
     }
@@ -967,15 +985,6 @@ void appendProjectedHamiltonianColumn(
          i <= newIndex;
          ++i) {
 
-        if (basis[i].size() !=
-            hBasis[newIndex].size()) {
-
-            throw std::invalid_argument(
-                "Los vectores de la base y H(base) "
-                "deben tener el mismo tamano."
-            );
-        }
-
         const double value =
             molecularDotProduct(
                 basis[i],
@@ -989,6 +998,175 @@ void appendProjectedHamiltonianColumn(
         projectedHamiltonian[newIndex][i] =
             value;
     }
+}
+
+
+/*
+ * ================================================================
+ * DAVIDSON PRECONDITIONER
+ * ================================================================
+ *
+ * Para el Hamiltoniano:
+ *
+ *     H = -1/2 nabla^2 + Veff
+ *
+ * y el Laplaciano central de siete puntos:
+ *
+ *     diag(-1/2 nabla^2)
+ *
+ * es:
+ *
+ *     1/dx^2 + 1/dy^2 + 1/dz^2
+ *
+ * Por tanto:
+ *
+ *     diag(H) =
+ *         1/dx^2 +
+ *         1/dy^2 +
+ *         1/dz^2 +
+ *         Veff
+ *
+ * El vector Davidson se obtiene como:
+ *
+ *     t_i = r_i / (theta - H_ii)
+ *
+ * con proteccion cuando el denominador se aproxima a cero.
+ *
+ * No se aplica H nuevamente para construir esta direccion.
+ *
+ * ================================================================
+ */
+
+std::vector<double> buildHamiltonianDiagonal(
+    const CartesianGrid& grid,
+    const std::vector<double>& effectivePotential
+) {
+    if (effectivePotential.size() != grid.getSize()) {
+        throw std::invalid_argument(
+            "El potencial efectivo y la malla deben "
+            "tener la misma dimension."
+        );
+    }
+
+    const double dx =
+        grid.getDx();
+
+    const double dy =
+        grid.getDy();
+
+    const double dz =
+        grid.getDz();
+
+    if (dx <= 0.0 ||
+        dy <= 0.0 ||
+        dz <= 0.0) {
+
+        throw std::invalid_argument(
+            "Los espaciamientos de la malla deben "
+            "ser positivos."
+        );
+    }
+
+    const double kineticDiagonal =
+        1.0 / (dx * dx) +
+        1.0 / (dy * dy) +
+        1.0 / (dz * dz);
+
+    std::vector<double> diagonal(
+        effectivePotential.size()
+    );
+
+    for (std::size_t i = 0;
+         i < effectivePotential.size();
+         ++i) {
+
+        diagonal[i] =
+            kineticDiagonal +
+            effectivePotential[i];
+    }
+
+    return diagonal;
+}
+
+
+bool buildDavidsonCorrection(
+    const std::vector<double>& residual,
+    const std::vector<double>& hamiltonianDiagonal,
+    double eigenvalue,
+    double volumeElement,
+    std::vector<double>& correction
+) {
+    if (residual.size() !=
+        hamiltonianDiagonal.size()) {
+
+        throw std::invalid_argument(
+            "El residuo y la diagonal del Hamiltoniano "
+            "deben tener el mismo tamano."
+        );
+    }
+
+    correction.resize(
+        residual.size()
+    );
+
+    bool usable = true;
+
+    for (std::size_t i = 0;
+         i < residual.size();
+         ++i) {
+
+        const double denominator =
+            eigenvalue -
+            hamiltonianDiagonal[i];
+
+        if (!std::isfinite(denominator) ||
+            std::abs(denominator) <
+            DAVIDSON_DENOMINATOR_TOLERANCE) {
+
+            correction[i] =
+                residual[i];
+
+            continue;
+        }
+
+        correction[i] =
+            residual[i] /
+            denominator;
+    }
+
+    orthogonalizeAgainstBasis(
+        correction,
+        std::vector<std::vector<double>>{},
+        volumeElement
+    );
+
+    /*
+     * La llamada anterior no modifica el vector porque la base
+     * esta vacia. Se mantiene el flujo de validacion centralizado.
+     */
+
+    for (double value : correction) {
+
+        if (!std::isfinite(value)) {
+            usable = false;
+            break;
+        }
+    }
+
+    if (!usable) {
+        return false;
+    }
+
+    const double normSquared =
+        molecularDotProduct(
+            correction,
+            correction,
+            volumeElement
+        );
+
+    return std::isfinite(normSquared) &&
+           normSquared >
+           SUBSPACE_ORTHOGONALITY_TOLERANCE_SQUARED;
 }
 
 
@@ -1044,6 +1222,87 @@ bool buildIndependentInitialVector(
     return false;
 }
 
+
+bool buildInitialVectorFromPreviousOrbital(
+    const CartesianGrid& grid,
+    const MolecularOrbital& initialGuess,
+    const std::vector<MolecularOrbital>& previousOrbitals,
+    double volumeElement,
+    std::vector<double>& result
+) {
+    if (initialGuess.psi.size() !=
+        grid.getSize()) {
+
+        throw std::invalid_argument(
+            "El orbital inicial y la malla cartesiana "
+            "deben tener la misma dimension."
+        );
+    }
+
+    result =
+        initialGuess.psi;
+
+    for (double value : result) {
+
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+
+    orthogonalizeAgainstPreviousOrbitals(
+        result,
+        previousOrbitals,
+        volumeElement
+    );
+
+    if (!hasMolecularNorm(
+            result,
+            volumeElement,
+            VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
+
+        return false;
+    }
+
+    normalizeMolecularVector(
+        result,
+        volumeElement,
+        "orbital SCF anterior"
+    );
+
+    return true;
+}
+
+
+bool buildInitialVector(
+    const CartesianGrid& grid,
+    std::size_t orbitalIndex,
+    const std::vector<MolecularOrbital>& previousOrbitals,
+    double volumeElement,
+    const MolecularOrbital* initialGuess,
+    std::vector<double>& result
+) {
+    if (initialGuess != nullptr) {
+
+        if (buildInitialVectorFromPreviousOrbital(
+                grid,
+                *initialGuess,
+                previousOrbitals,
+                volumeElement,
+                result)) {
+
+            return true;
+        }
+    }
+
+    return buildIndependentInitialVector(
+        grid,
+        orbitalIndex,
+        previousOrbitals,
+        volumeElement,
+        result
+    );
+}
+
 } // namespace
 
 
@@ -1060,6 +1319,7 @@ MolecularOrbital solveMolecularOrbital(
     SpinChannel spin,
     int electrons,
     const std::vector<MolecularOrbital>& previousOrbitals,
+    const MolecularOrbital* initialGuess,
     std::size_t maxIterations
 ) {
     if (effectivePotential.size() !=
@@ -1139,17 +1399,32 @@ MolecularOrbital solveMolecularOrbital(
 
     /*
      * ------------------------------------------------------------
+     * DAVIDSON PRECONDITIONER
+     * ------------------------------------------------------------
+     */
+
+    const std::vector<double>
+        hamiltonianDiagonal =
+            buildHamiltonianDiagonal(
+                grid,
+                effectivePotential
+            );
+
+
+    /*
+     * ------------------------------------------------------------
      * INITIAL VECTOR
      * ------------------------------------------------------------
      */
 
     std::vector<double> initialVector;
 
-    if (!buildIndependentInitialVector(
+    if (!buildInitialVector(
             grid,
             orbitalIndex,
             previousOrbitals,
             volumeElement,
+            initialGuess,
             initialVector)) {
 
         throw std::runtime_error(
@@ -1183,8 +1458,11 @@ MolecularOrbital solveMolecularOrbital(
     std::vector<std::vector<double>>
         projectedHamiltonian;
 
-    std::size_t hApplications =
-        0;
+    projectedHamiltonian.reserve(
+        MAX_SUBSPACE_DIMENSION
+    );
+
+    std::size_t hApplications = 0;
 
     double finalEigenvalue =
         std::numeric_limits<double>::infinity();
@@ -1196,15 +1474,17 @@ MolecularOrbital solveMolecularOrbital(
 
 
     /*
-     * ------------------------------------------------------------
-     * ITERATIVE SUBSPACE SOLVER
-     * ------------------------------------------------------------
+     * ============================================================
+     * DAVIDSON ITERATION
+     * ============================================================
      */
 
     while (hApplications < maxIterations) {
 
         /*
-         * Apply H only to a newly added basis vector.
+         * --------------------------------------------------------
+         * APPLY H TO NEW BASIS VECTOR
+         * --------------------------------------------------------
          */
 
         if (hBasis.size() < basis.size()) {
@@ -1245,7 +1525,7 @@ MolecularOrbital solveMolecularOrbital(
 
         /*
          * --------------------------------------------------------
-         * PROJECTED HAMILTONIAN
+         * PROJECTED EIGENPROBLEM
          * --------------------------------------------------------
          */
 
@@ -1261,11 +1541,6 @@ MolecularOrbital solveMolecularOrbital(
          * RITZ VECTOR
          * --------------------------------------------------------
          */
-
-        const std::size_t currentSubspaceDimension =
-            basis.size();
-
-        (void)currentSubspaceDimension;
 
         std::vector<double> ritzVector =
             buildSubspaceVector(
@@ -1372,6 +1647,14 @@ MolecularOrbital solveMolecularOrbital(
          * --------------------------------------------------------
          * H(RITZ)
          * --------------------------------------------------------
+         *
+         * Como el vector Ritz pertenece al subespacio actual:
+         *
+         *     H Ritz = sum_j c_j H basis_j
+         *
+         * No se vuelve a aplicar H al Ritz.
+         *
+         * --------------------------------------------------------
          */
 
         std::vector<double> hRitz =
@@ -1449,7 +1732,7 @@ MolecularOrbital solveMolecularOrbital(
 
         /*
          * --------------------------------------------------------
-         * RESIDUAL VECTOR
+         * RESIDUAL
          * --------------------------------------------------------
          */
 
@@ -1470,8 +1753,9 @@ MolecularOrbital solveMolecularOrbital(
 
 
         /*
-         * El residuo se hace ortogonal a los orbitales ya
-         * determinados y a la base actual.
+         * --------------------------------------------------------
+         * ORTHOGONALIZE RESIDUAL
+         * --------------------------------------------------------
          */
 
         orthogonalizeAgainstPreviousOrbitals(
@@ -1494,13 +1778,6 @@ MolecularOrbital solveMolecularOrbital(
                 volumeElement
             );
 
-
-        /*
-         * --------------------------------------------------------
-         * RESIDUAL STAGNATION
-         * --------------------------------------------------------
-         */
-
         if (!std::isfinite(residualNormSquared) ||
             !(residualNormSquared >
               SUBSPACE_ORTHOGONALITY_TOLERANCE_SQUARED)) {
@@ -1514,14 +1791,109 @@ MolecularOrbital solveMolecularOrbital(
 
         /*
          * --------------------------------------------------------
-         * NORMALIZE RESIDUAL
+         * DAVIDSON CORRECTION
+         * --------------------------------------------------------
+         *
+         * En lugar de introducir directamente:
+         *
+         *     r
+         *
+         * introducimos:
+         *
+         *     D^{-1} r
+         *
+         * donde:
+         *
+         *     D_ii = epsilon - H_ii
+         *
+         * Esto concentra la nueva direccion en las componentes
+         * que pueden corregir mas eficazmente el autovector.
          * --------------------------------------------------------
          */
 
+        std::vector<double> correction;
+
+        if (!buildDavidsonCorrection(
+                residual,
+                hamiltonianDiagonal,
+                finalEigenvalue,
+                volumeElement,
+                correction)) {
+
+            correction =
+                std::move(residual);
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * ORTHOGONALIZE CORRECTION
+         * --------------------------------------------------------
+         */
+
+        orthogonalizeAgainstPreviousOrbitals(
+            correction,
+            previousOrbitals,
+            volumeElement
+        );
+
+        orthogonalizeAgainstBasis(
+            correction,
+            basis,
+            volumeElement
+        );
+
+
+        const double correctionNormSquared =
+            molecularDotProduct(
+                correction,
+                correction,
+                volumeElement
+            );
+
+        if (!std::isfinite(correctionNormSquared) ||
+            !(correctionNormSquared >
+              SUBSPACE_ORTHOGONALITY_TOLERANCE_SQUARED)) {
+
+            /*
+             * El precondicionamiento puede perder efectividad
+             * cuando la diagonal presenta un polo cercano.
+             *
+             * En ese caso se recupera el residuo original.
+             */
+
+            correction =
+                std::move(residual);
+
+            orthogonalizeAgainstPreviousOrbitals(
+                correction,
+                previousOrbitals,
+                volumeElement
+            );
+
+            orthogonalizeAgainstBasis(
+                correction,
+                basis,
+                volumeElement
+            );
+        }
+
+
+        if (!hasMolecularNorm(
+                correction,
+                volumeElement,
+                SUBSPACE_ORTHOGONALITY_TOLERANCE_SQUARED)) {
+
+            throw std::runtime_error(
+                "La correccion Davidson es numericamente "
+                "dependiente del subespacio."
+            );
+        }
+
         normalizeMolecularVector(
-            residual,
+            correction,
             volumeElement,
-            "residuo molecular"
+            "correccion Davidson"
         );
 
 
@@ -1535,7 +1907,7 @@ MolecularOrbital solveMolecularOrbital(
             MAX_SUBSPACE_DIMENSION) {
 
             basis.push_back(
-                std::move(residual)
+                std::move(correction)
             );
 
             continue;
@@ -1543,43 +1915,37 @@ MolecularOrbital solveMolecularOrbital(
 
 
         /*
-         * --------------------------------------------------------
-         * RESIDUAL-BASED RESTART
-         * --------------------------------------------------------
+         * ========================================================
+         * DAVIDSON RESTART
+         * ========================================================
          *
-         * Se conserva:
+         * Se conserva el mejor Ritz y la direccion de correccion.
          *
-         *   1. el Ritz actual
-         *   2. el residuo normalizado
-         *
-         * El residuo YA esta ortogonalizado antes de aplicar H.
-         * Por tanto no debe modificarse despues de calcular H(r).
-         *
-         * Esto mantiene la identidad matematica:
-         *
-         *       hResidual = H * residual
-         *
-         * --------------------------------------------------------
+         * La correccion NO necesita una segunda aplicacion de H
+         * antes de ser almacenada: H(correction) se calcula una
+         * sola vez aqui.
+         * ========================================================
          */
 
         if (hApplications >= maxIterations) {
             break;
         }
 
-        std::vector<double> hResidual =
+        std::vector<double> hCorrection =
             applyMolecularKohnShamHamiltonian(
                 grid,
                 effectivePotential,
-                residual
+                correction
             );
 
         ++hApplications;
 
-        if (hResidual.size() != dimension) {
+        if (hCorrection.size() != dimension) {
 
             throw std::runtime_error(
                 "El Hamiltoniano molecular devolvio "
-                "una dimension incorrecta para el residuo."
+                "una dimension incorrecta para la "
+                "correccion Davidson."
             );
         }
 
@@ -1594,6 +1960,14 @@ MolecularOrbital solveMolecularOrbital(
         hBasis.clear();
         projectedHamiltonian.clear();
 
+        basis.reserve(
+            MAX_SUBSPACE_DIMENSION
+        );
+
+        hBasis.reserve(
+            MAX_SUBSPACE_DIMENSION
+        );
+
         basis.push_back(
             std::move(ritzVector)
         );
@@ -1603,23 +1977,13 @@ MolecularOrbital solveMolecularOrbital(
         );
 
         basis.push_back(
-            std::move(residual)
+            std::move(correction)
         );
 
         hBasis.push_back(
-            std::move(hResidual)
+            std::move(hCorrection)
         );
 
-
-        /*
-         * Construccion exacta del Hamiltoniano proyectado 2x2.
-         *
-         * La base es:
-         *
-         *       { Ritz, Residuo }
-         *
-         * y ambas funciones estan normalizadas y ortogonales.
-         */
 
         projectedHamiltonian.assign(
             2,
@@ -1656,9 +2020,9 @@ MolecularOrbital solveMolecularOrbital(
 
 
     /*
-     * ------------------------------------------------------------
+     * ============================================================
      * FINAL VALIDATION
-     * ------------------------------------------------------------
+     * ============================================================
      */
 
     if (finalVector.empty() ||
@@ -1703,9 +2067,9 @@ MolecularOrbital solveMolecularOrbital(
 
 
     /*
-     * ------------------------------------------------------------
+     * ============================================================
      * RESULT
-     * ------------------------------------------------------------
+     * ============================================================
      */
 
     MolecularOrbital orbital;
@@ -1738,6 +2102,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitals(
     std::size_t numberOfOrbitals,
     const std::vector<int>& occupations,
     SpinChannel spin,
+    const std::vector<MolecularOrbital>& initialOrbitals,
     std::size_t maxIterations
 ) {
     if (numberOfOrbitals == 0) {
@@ -1754,6 +2119,15 @@ std::vector<MolecularOrbital> solveMolecularOrbitals(
         throw std::invalid_argument(
             "El numero de ocupaciones debe coincidir "
             "con el numero de orbitales."
+        );
+    }
+
+    if (!initialOrbitals.empty() &&
+        initialOrbitals.size() != numberOfOrbitals) {
+
+        throw std::invalid_argument(
+            "El numero de orbitales iniciales debe "
+            "coincidir con el numero de orbitales solicitados."
         );
     }
 
@@ -1776,6 +2150,11 @@ std::vector<MolecularOrbital> solveMolecularOrbitals(
             );
         }
 
+        const MolecularOrbital* initialGuess =
+            initialOrbitals.empty()
+                ? nullptr
+                : &initialOrbitals[i];
+
         MolecularOrbital orbital =
             solveMolecularOrbital(
                 grid,
@@ -1784,6 +2163,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitals(
                 spin,
                 occupations[i],
                 orbitals,
+                initialGuess,
                 maxIterations
             );
 
