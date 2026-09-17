@@ -129,13 +129,6 @@ double molecularNorm(
             volumeElement
         );
 
-    /*
-     * Esta cantidad es una NORMA AL CUADRADO.
-     *
-     * No se compara contra DFTConstants::EPS porque EPS
-     * no representa el criterio de independencia de un
-     * vector molecular.
-     */
     if (!std::isfinite(squaredNorm) ||
         !(squaredNorm >
           VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
@@ -254,34 +247,52 @@ void orthogonalizeAgainstPreviousOrbitals(
     const std::vector<MolecularOrbital>& previousOrbitals,
     double volumeElement
 ) {
+    std::vector<double> orbitalNormSquared;
+
+    orbitalNormSquared.reserve(
+        previousOrbitals.size()
+    );
+
+    for (const MolecularOrbital& orbital :
+         previousOrbitals) {
+
+        if (orbital.psi.size() != vector.size()) {
+            throw std::invalid_argument(
+                "Los orbitales moleculares deben estar "
+                "definidos sobre la misma malla."
+            );
+        }
+
+        const double normSquared =
+            molecularDotProduct(
+                orbital.psi,
+                orbital.psi,
+                volumeElement
+            );
+
+        if (!std::isfinite(normSquared) ||
+            !(normSquared >
+              VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
+
+            throw std::runtime_error(
+                "Un orbital molecular previo no tiene "
+                "una norma numericamente valida."
+            );
+        }
+
+        orbitalNormSquared.push_back(
+            normSquared
+        );
+    }
+
     for (int pass = 0; pass < 2; ++pass) {
 
-        for (const MolecularOrbital& orbital :
-             previousOrbitals) {
+        for (std::size_t orbitalIndex = 0;
+             orbitalIndex < previousOrbitals.size();
+             ++orbitalIndex) {
 
-            if (orbital.psi.size() != vector.size()) {
-                throw std::invalid_argument(
-                    "Los orbitales moleculares deben estar "
-                    "definidos sobre la misma malla."
-                );
-            }
-
-            const double orbitalNormSquared =
-                molecularDotProduct(
-                    orbital.psi,
-                    orbital.psi,
-                    volumeElement
-                );
-
-            if (!std::isfinite(orbitalNormSquared) ||
-                !(orbitalNormSquared >
-                  VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
-
-                throw std::runtime_error(
-                    "Un orbital molecular previo no tiene "
-                    "una norma numericamente valida."
-                );
-            }
+            const MolecularOrbital& orbital =
+                previousOrbitals[orbitalIndex];
 
             const double projectionNumerator =
                 molecularDotProduct(
@@ -292,7 +303,7 @@ void orthogonalizeAgainstPreviousOrbitals(
 
             const double projection =
                 projectionNumerator /
-                orbitalNormSquared;
+                orbitalNormSquared[orbitalIndex];
 
             for (std::size_t i = 0;
                  i < vector.size();
@@ -793,16 +804,6 @@ DenseSymmetricEigenpair diagonalizeDenseSymmetricMatrix(
     if (!(norm > DFTConstants::EPS) ||
         !std::isfinite(norm)) {
 
-        std::cout
-            << "\n"
-            << "    >>> ERROR EN AUTOVECTOR DENSO <<<\n"
-            << "      Dimension matriz: "
-            << n
-            << "\n"
-            << "      Norma:            "
-            << norm
-            << "\n";
-
         throw std::runtime_error(
             "El autovector denso es numericamente nulo."
         );
@@ -874,17 +875,6 @@ std::vector<double> buildSubspaceVector(
         }
     }
 
-    /*
-     * IMPORTANTE:
-     *
-     * No normalizamos aqui.
-     *
-     * El Ritz debe primero pasar por la
-     * ortogonalizacion contra los orbitales
-     * anteriores. Normalizar antes puede amplificar
-     * una direccion numericamente casi colapsada.
-     */
-
     return vector;
 }
 
@@ -940,37 +930,45 @@ std::vector<double> buildSubspaceHamiltonianVector(
 }
 
 
-std::vector<std::vector<double>> buildProjectedHamiltonian(
+void appendProjectedHamiltonianColumn(
+    std::vector<std::vector<double>>& projectedHamiltonian,
     const std::vector<std::vector<double>>& basis,
     const std::vector<std::vector<double>>& hBasis,
+    std::size_t newIndex,
     double volumeElement
 ) {
-    if (basis.empty() ||
-        basis.size() != hBasis.size()) {
-
-        throw std::invalid_argument(
-            "La base y H(base) deben tener "
-            "el mismo tamano no nulo."
-        );
-    }
-
     const std::size_t dimension =
         basis.size();
 
-    std::vector<std::vector<double>> matrix(
-        dimension,
-        std::vector<double>(
-            dimension,
-            0.0
-        )
+    if (dimension == 0 ||
+        dimension != hBasis.size() ||
+        newIndex >= dimension) {
+
+        throw std::invalid_argument(
+            "Dimensiones invalidas al actualizar "
+            "el Hamiltoniano proyectado."
+        );
+    }
+
+    projectedHamiltonian.resize(
+        dimension
     );
 
+    for (std::vector<double>& row :
+         projectedHamiltonian) {
+
+        row.resize(
+            dimension,
+            0.0
+        );
+    }
+
     for (std::size_t i = 0;
-         i < dimension;
+         i <= newIndex;
          ++i) {
 
         if (basis[i].size() !=
-            hBasis[i].size()) {
+            hBasis[newIndex].size()) {
 
             throw std::invalid_argument(
                 "Los vectores de la base y H(base) "
@@ -978,26 +976,19 @@ std::vector<std::vector<double>> buildProjectedHamiltonian(
             );
         }
 
-        for (std::size_t j = i;
-             j < dimension;
-             ++j) {
+        const double value =
+            molecularDotProduct(
+                basis[i],
+                hBasis[newIndex],
+                volumeElement
+            );
 
-            const double value =
-                molecularDotProduct(
-                    basis[i],
-                    hBasis[j],
-                    volumeElement
-                );
+        projectedHamiltonian[i][newIndex] =
+            value;
 
-            matrix[i][j] =
-                value;
-
-            matrix[j][i] =
-                value;
-        }
+        projectedHamiltonian[newIndex][i] =
+            value;
     }
-
-    return matrix;
 }
 
 
@@ -1014,8 +1005,6 @@ bool buildIndependentInitialVector(
     double volumeElement,
     std::vector<double>& result
 ) {
-    std::size_t rejectedSeeds = 0;
-
     for (std::size_t seed = orbitalIndex;
          seed < orbitalIndex + 64;
          ++seed) {
@@ -1037,7 +1026,6 @@ bool buildIndependentInitialVector(
                 volumeElement,
                 VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
 
-            ++rejectedSeeds;
             continue;
         }
 
@@ -1050,30 +1038,8 @@ bool buildIndependentInitialVector(
         result =
             std::move(candidate);
 
-        std::cout
-            << "    Semilla inicial seleccionada: "
-            << seed
-            << " (modo "
-            << seed % 9
-            << ", rechazadas="
-            << rejectedSeeds
-            << ")\n";
-
         return true;
     }
-
-    std::cout
-        << "    [DIAGNOSTICO] No se encontro semilla "
-        << "independiente.\n"
-        << "      Orbital solicitado: "
-        << orbitalIndex
-        << "\n"
-        << "      Orbitales previos: "
-        << previousOrbitals.size()
-        << "\n"
-        << "      Semillas rechazadas: "
-        << rejectedSeeds
-        << "\n";
 
     return false;
 }
@@ -1214,6 +1180,9 @@ MolecularOrbital solveMolecularOrbital(
         std::move(initialVector)
     );
 
+    std::vector<std::vector<double>>
+        projectedHamiltonian;
+
     std::size_t hApplications =
         0;
 
@@ -1225,12 +1194,6 @@ MolecularOrbital solveMolecularOrbital(
 
     std::vector<double> finalVector;
 
-    bool reportedRecovery =
-        false;
-
-    bool reportedResidualStagnation =
-        false;
-
 
     /*
      * ------------------------------------------------------------
@@ -1241,7 +1204,7 @@ MolecularOrbital solveMolecularOrbital(
     while (hApplications < maxIterations) {
 
         /*
-         * Apply H to every newly added basis vector.
+         * Apply H only to a newly added basis vector.
          */
 
         if (hBasis.size() < basis.size()) {
@@ -1269,6 +1232,14 @@ MolecularOrbital solveMolecularOrbital(
             );
 
             ++hApplications;
+
+            appendProjectedHamiltonianColumn(
+                projectedHamiltonian,
+                basis,
+                hBasis,
+                index,
+                volumeElement
+            );
         }
 
 
@@ -1277,14 +1248,6 @@ MolecularOrbital solveMolecularOrbital(
          * PROJECTED HAMILTONIAN
          * --------------------------------------------------------
          */
-
-        const std::vector<std::vector<double>>
-            projectedHamiltonian =
-                buildProjectedHamiltonian(
-                    basis,
-                    hBasis,
-                    volumeElement
-                );
 
         const DenseSymmetricEigenpair
             projectedEigenpair =
@@ -1302,25 +1265,13 @@ MolecularOrbital solveMolecularOrbital(
         const std::size_t currentSubspaceDimension =
             basis.size();
 
+        (void)currentSubspaceDimension;
+
         std::vector<double> ritzVector =
             buildSubspaceVector(
                 basis,
                 projectedEigenpair.eigenvector
             );
-
-        const double ritzNormSquaredBefore =
-            molecularDotProduct(
-                ritzVector,
-                ritzVector,
-                volumeElement
-            );
-
-        /*
-         * The Ritz vector is constructed from a basis that is
-         * already approximately orthonormal. Nevertheless, the
-         * previous molecular orbitals are explicitly removed
-         * again to control accumulated numerical contamination.
-         */
 
         orthogonalizeAgainstPreviousOrbitals(
             ritzVector,
@@ -1328,7 +1279,7 @@ MolecularOrbital solveMolecularOrbital(
             volumeElement
         );
 
-        const double ritzNormSquaredAfter =
+        const double ritzNormSquared =
             molecularDotProduct(
                 ritzVector,
                 ritzVector,
@@ -1342,41 +1293,17 @@ MolecularOrbital solveMolecularOrbital(
          * --------------------------------------------------------
          */
 
-        if (!std::isfinite(ritzNormSquaredAfter) ||
-            !(ritzNormSquaredAfter >
+        if (!std::isfinite(ritzNormSquared) ||
+            !(ritzNormSquared >
               VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
 
-            if (!reportedRecovery) {
+            if (basis.size() >=
+                MAX_SUBSPACE_DIMENSION) {
 
-                std::cout
-                    << "    [RECUPERACION] El vector de Ritz "
-                    << "colapso tras ortogonalizacion.\n"
-                    << "      Orbital:          "
-                    << orbitalIndex
-                    << "\n"
-                    << "      Spin:             "
-                    << spinName
-                    << "\n"
-                    << "      Subespacio:       "
-                    << currentSubspaceDimension
-                    << "\n"
-                    << "      H aplicaciones:   "
-                    << hApplications
-                    << "\n"
-                    << "      Norma^2 antes:    "
-                    << ritzNormSquaredBefore
-                    << "\n"
-                    << "      Norma^2 despues:  "
-                    << ritzNormSquaredAfter
-                    << "\n";
-
-                printVectorDiagnostic(
-                    "Ritz colapsado",
-                    ritzVector,
-                    volumeElement
+                throw std::runtime_error(
+                    "El vector de Ritz colapso en un "
+                    "subespacio completo."
                 );
-
-                reportedRecovery = true;
             }
 
             std::vector<double> recoveryVector;
@@ -1388,7 +1315,10 @@ MolecularOrbital solveMolecularOrbital(
                     volumeElement,
                     recoveryVector)) {
 
-                break;
+                throw std::runtime_error(
+                    "No se pudo construir un vector de "
+                    "recuperacion para el subespacio."
+                );
             }
 
             orthogonalizeAgainstBasis(
@@ -1397,35 +1327,15 @@ MolecularOrbital solveMolecularOrbital(
                 volumeElement
             );
 
-            const double recoveryNormSquared =
-                molecularDotProduct(
+            if (!hasMolecularNorm(
                     recoveryVector,
-                    recoveryVector,
-                    volumeElement
+                    volumeElement,
+                    VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
+
+                throw std::runtime_error(
+                    "El vector de recuperacion es "
+                    "numericamente dependiente."
                 );
-
-            if (!std::isfinite(recoveryNormSquared) ||
-                !(recoveryNormSquared >
-                  VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
-
-                std::cout
-                    << "    [RECUPERACION FALLIDA]\n"
-                    << "      La direccion de recuperacion "
-                    << "tambien fue eliminada por la base.\n"
-                    << "      Subespacio actual: "
-                    << basis.size()
-                    << "\n"
-                    << "      Norma^2 recuperacion: "
-                    << recoveryNormSquared
-                    << "\n";
-
-                printVectorDiagnostic(
-                    "Recovery vector colapsado",
-                    recoveryVector,
-                    volumeElement
-                );
-
-                break;
             }
 
             normalizeMolecularVector(
@@ -1560,8 +1470,8 @@ MolecularOrbital solveMolecularOrbital(
 
 
         /*
-         * Remove components belonging to previous molecular
-         * orbitals.
+         * El residuo se hace ortogonal a los orbitales ya
+         * determinados y a la base actual.
          */
 
         orthogonalizeAgainstPreviousOrbitals(
@@ -1569,12 +1479,6 @@ MolecularOrbital solveMolecularOrbital(
             previousOrbitals,
             volumeElement
         );
-
-
-        /*
-         * Remove the component already represented by the
-         * current Krylov/subspace basis.
-         */
 
         orthogonalizeAgainstBasis(
             residual,
@@ -1601,50 +1505,16 @@ MolecularOrbital solveMolecularOrbital(
             !(residualNormSquared >
               SUBSPACE_ORTHOGONALITY_TOLERANCE_SQUARED)) {
 
-            if (!reportedResidualStagnation) {
-
-                std::cout
-                    << "    [ESTANCAMIENTO]\n"
-                    << "      El residuo no proporciona "
-                    << "una nueva direccion independiente.\n"
-                    << "      Orbital:          "
-                    << orbitalIndex
-                    << "\n"
-                    << "      Spin:             "
-                    << spinName
-                    << "\n"
-                    << "      H aplicaciones:   "
-                    << hApplications
-                    << "\n"
-                    << "      Subespacio:       "
-                    << basis.size()
-                    << "\n"
-                    << "      Autovalor:        "
-                    << finalEigenvalue
-                    << "\n"
-                    << "      Residuo:          "
-                    << finalResidual
-                    << "\n"
-                    << "      Norma^2 residuo:  "
-                    << residualNormSquared
-                    << "\n";
-
-                printVectorDiagnostic(
-                    "Residuo sin direccion independiente",
-                    residual,
-                    volumeElement
-                );
-
-                reportedResidualStagnation = true;
-            }
-
-            break;
+            throw std::runtime_error(
+                "El residuo molecular se volvio "
+                "numericamente dependiente del subespacio."
+            );
         }
 
 
         /*
          * --------------------------------------------------------
-         * ADD RESIDUAL TO SUBSPACE
+         * NORMALIZE RESIDUAL
          * --------------------------------------------------------
          */
 
@@ -1654,6 +1524,12 @@ MolecularOrbital solveMolecularOrbital(
             "residuo molecular"
         );
 
+
+        /*
+         * --------------------------------------------------------
+         * EXTEND SUBSPACE
+         * --------------------------------------------------------
+         */
 
         if (basis.size() <
             MAX_SUBSPACE_DIMENSION) {
@@ -1668,39 +1544,55 @@ MolecularOrbital solveMolecularOrbital(
 
         /*
          * --------------------------------------------------------
+         * RESIDUAL-BASED RESTART
+         * --------------------------------------------------------
+         *
+         * Se conserva:
+         *
+         *   1. el Ritz actual
+         *   2. el residuo normalizado
+         *
+         * El residuo YA esta ortogonalizado antes de aplicar H.
+         * Por tanto no debe modificarse despues de calcular H(r).
+         *
+         * Esto mantiene la identidad matematica:
+         *
+         *       hResidual = H * residual
+         *
+         * --------------------------------------------------------
+         */
+
+        if (hApplications >= maxIterations) {
+            break;
+        }
+
+        std::vector<double> hResidual =
+            applyMolecularKohnShamHamiltonian(
+                grid,
+                effectivePotential,
+                residual
+            );
+
+        ++hApplications;
+
+        if (hResidual.size() != dimension) {
+
+            throw std::runtime_error(
+                "El Hamiltoniano molecular devolvio "
+                "una dimension incorrecta para el residuo."
+            );
+        }
+
+
+        /*
+         * --------------------------------------------------------
          * RESTART
          * --------------------------------------------------------
          */
 
-        std::cout
-            << "    [REINICIO] Subespacio alcanzo "
-            << MAX_SUBSPACE_DIMENSION
-            << " vectores.\n"
-            << "      Orbital:          "
-            << orbitalIndex
-            << "\n"
-            << "      Spin:             "
-            << spinName
-            << "\n"
-            << "      H aplicaciones:   "
-            << hApplications
-            << "\n"
-            << "      Autovalor actual: "
-            << finalEigenvalue
-            << "\n"
-            << "      Residuo actual:   "
-            << finalResidual
-            << "\n";
-
-
         basis.clear();
         hBasis.clear();
-
-
-        /*
-         * Keep the current Ritz vector as the first direction
-         * of the restarted subspace.
-         */
+        projectedHamiltonian.clear();
 
         basis.push_back(
             std::move(ritzVector)
@@ -1710,69 +1602,56 @@ MolecularOrbital solveMolecularOrbital(
             std::move(hRitz)
         );
 
+        basis.push_back(
+            std::move(residual)
+        );
+
+        hBasis.push_back(
+            std::move(hResidual)
+        );
+
 
         /*
-         * Construct a second independent direction.
+         * Construccion exacta del Hamiltoniano proyectado 2x2.
+         *
+         * La base es:
+         *
+         *       { Ritz, Residuo }
+         *
+         * y ambas funciones estan normalizadas y ortogonales.
          */
 
-        std::vector<double> restartVector;
-
-        if (!buildIndependentInitialVector(
-                grid,
-                orbitalIndex + 1,
-                previousOrbitals,
-                volumeElement,
-                restartVector)) {
-
-            throw std::runtime_error(
-                "No se pudo construir una direccion "
-                "independiente para reiniciar el subespacio."
-            );
-        }
-
-        orthogonalizeAgainstBasis(
-            restartVector,
-            basis,
-            volumeElement
+        projectedHamiltonian.assign(
+            2,
+            std::vector<double>(
+                2,
+                0.0
+            )
         );
 
-        const double restartNormSquared =
+        projectedHamiltonian[0][0] =
             molecularDotProduct(
-                restartVector,
-                restartVector,
+                basis[0],
+                hBasis[0],
                 volumeElement
             );
 
-        if (!std::isfinite(restartNormSquared) ||
-            !(restartNormSquared >
-              VECTOR_RECOVERY_TOLERANCE_SQUARED)) {
-
-            std::cout
-                << "    [REINICIO FALLIDO] "
-                << "La direccion de reinicio "
-                << "fue eliminada por el Ritz actual.\n"
-                << "      Norma^2: "
-                << restartNormSquared
-                << "\n";
-
-            printVectorDiagnostic(
-                "Restart vector colapsado",
-                restartVector,
+        projectedHamiltonian[0][1] =
+            molecularDotProduct(
+                basis[0],
+                hBasis[1],
                 volumeElement
             );
 
-            continue;
-        }
+        projectedHamiltonian[1][0] =
+            projectedHamiltonian[0][1];
 
-        normalizeMolecularVector(
-            restartVector,
-            volumeElement,
-            "direccion de reinicio"
-        );
-
-        basis.push_back(
-            std::move(restartVector)
-        );
+        projectedHamiltonian[1][1] =
+            molecularDotProduct(
+                basis[1],
+                hBasis[1],
+                volumeElement
+            );
     }
 
 
@@ -1785,37 +1664,6 @@ MolecularOrbital solveMolecularOrbital(
     if (finalVector.empty() ||
         !(finalResidual <
           MO_RESIDUAL_TOLERANCE)) {
-
-        std::cout
-            << "\n"
-            << "    >>> ORBITAL NO CONVERGIO <<<\n"
-            << "      Canal:             "
-            << spinName
-            << "\n"
-            << "      Indice orbital:    "
-            << orbitalIndex
-            << "\n"
-            << "      Aplicaciones H:    "
-            << hApplications
-            << "\n"
-            << "      Subespacio final:  "
-            << basis.size()
-            << "\n"
-            << "      Autovalor:         "
-            << finalEigenvalue
-            << "\n"
-            << "      Residuo final:     "
-            << finalResidual
-            << "\n";
-
-        if (!finalVector.empty()) {
-
-            printVectorDiagnostic(
-                "Ultimo Ritz conservado",
-                finalVector,
-                volumeElement
-            );
-        }
 
         throw std::runtime_error(
             "El orbital molecular no alcanzo la convergencia.\n"

@@ -11,8 +11,10 @@
 #include <iomanip>
 #include <iostream>
 
-int main() {
-    try {
+int main()
+{
+    try
+    {
         RadialGrid grid(
             DFTConstants::GRID_POINTS,
             DFTConstants::RMAX
@@ -52,26 +54,50 @@ int main() {
             << hPBE96.scf.energy.total
             << " Ha\n";
 
-        Molecule h2(0);
+        const AtomicConfiguration oxygen =
+            getAtomicConfiguration(8);
 
-        h2.addNucleus(
-            1,
-            -0.7,
+        const AtomicResult oPZ81 =
+            solveAtom(
+                grid,
+                oxygen,
+                pz81
+            );
+
+        std::cout
+            << "O | PZ81  | E = "
+            << std::scientific
+            << std::setprecision(10)
+            << oPZ81.scf.energy.total
+            << " Ha\n";
+
+        Molecule co2(0);
+
+        co2.addNucleus(
+            8,
+            -2.2,
             0.0,
             0.0
         );
 
-        h2.addNucleus(
-            1,
-            0.7,
+        co2.addNucleus(
+            6,
+            0.0,
+            0.0,
+            0.0
+        );
+
+        co2.addNucleus(
+            8,
+            2.2,
             0.0,
             0.0
         );
 
         CartesianGrid molecularGrid(
-            11,
-            11,
-            11,
+            7,
+            7,
+            7,
             -8.1,
             7.9,
             -8.1,
@@ -80,95 +106,29 @@ int main() {
             7.9
         );
 
-        const MolecularResult h2PZ81 =
+        const MolecularResult co2PZ81 =
             solveMolecularSelfConsistentField(
                 molecularGrid,
-                h2,
-                h2.getCharge(),
+                co2,
+                co2.getCharge(),
                 pz81
             );
 
         std::cout
-            << "H2 | PZ81  | E = "
+            << "CO2 | PZ81 | E = "
             << std::scientific
             << std::setprecision(10)
-            << h2PZ81.scf.energy.total
+            << co2PZ81.scf.energy.total
             << " Ha\n";
 
-        const auto& h2Nuclei = h2.getNuclei();
+        const auto& co2Nuclei = co2.getNuclei();
 
-        for (std::size_t i = 0; i < h2Nuclei.size(); ++i) {
-            const auto& nucleus = h2Nuclei[i];
-
-            std::cout
-                << "H2 | Nucleo " << i
-                << " | Z = " << nucleus.atomicNumber
-                << " | Posicion = ("
-                << std::fixed
-                << std::setprecision(6)
-                << nucleus.position[0] << ", "
-                << nucleus.position[1] << ", "
-                << nucleus.position[2]
-                << ")\n";
-        }
-
-        Molecule h2o(0);
-
-        h2o.addNucleus(
-            8,
-            0.0,
-            0.0,
-            0.0
-        );
-
-        h2o.addNucleus(
-            1,
-            1.432,
-            1.107,
-            0.0
-        );
-
-        h2o.addNucleus(
-            1,
-            -1.432,
-            1.107,
-            0.0
-        );
-
-        CartesianGrid waterGrid(
-            13,
-            13,
-            13,
-            -6.1,
-            5.9,
-            -6.1,
-            5.9,
-            -6.1,
-            5.9
-        );
-
-        const MolecularResult h2oPZ81 =
-            solveMolecularSelfConsistentField(
-                waterGrid,
-                h2o,
-                h2o.getCharge(),
-                pz81
-            );
-
-        std::cout
-            << "H2O | PZ81  | E = "
-            << std::scientific
-            << std::setprecision(10)
-            << h2oPZ81.scf.energy.total
-            << " Ha\n";
-
-        const auto& h2oNuclei = h2o.getNuclei();
-
-        for (std::size_t i = 0; i < h2oNuclei.size(); ++i) {
-            const auto& nucleus = h2oNuclei[i];
+        for (std::size_t i = 0; i < co2Nuclei.size(); ++i)
+        {
+            const auto& nucleus = co2Nuclei[i];
 
             std::cout
-                << "H2O | Nucleo " << i
+                << "CO2 | Nucleo " << i
                 << " | Z = " << nucleus.atomicNumber
                 << " | Posicion = ("
                 << std::fixed
@@ -181,7 +141,8 @@ int main() {
 
         return 0;
     }
-    catch (const std::exception& error) {
+    catch (const std::exception& error)
+    {
         std::cerr
             << "ERROR: "
             << error.what()
@@ -189,7 +150,8 @@ int main() {
 
         return 1;
     }
-    catch (...) {
+    catch (...)
+    {
         std::cerr
             << "ERROR: excepcion desconocida.\n";
 
