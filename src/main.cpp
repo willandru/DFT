@@ -195,6 +195,73 @@ int main()
             << h2oPZ81.scf.energy.total
             << " Ha\n";
 
+        // ============================================================
+        // MOLECULA CO2 - PZ81
+        //
+        // Geometria lineal aproximada:
+        //
+        // O1 = (-2.192, 0.000, 0.000) bohr
+        // C  = ( 0.000, 0.000, 0.000) bohr
+        // O2 = ( 2.192, 0.000, 0.000) bohr
+        //
+        // Distancia C-O ~ 1.16 A
+        // Angulo O-C-O = 180 grados
+        //
+        // Carga molecular = 0
+        // Electrones = 22
+        // ============================================================
+
+        Molecule co2(0);
+
+        co2.addNucleus(
+            6,
+            0.0,
+            0.0,
+            0.0
+        );
+
+        co2.addNucleus(
+            8,
+            -2.192,
+            0.0,
+            0.0
+        );
+
+        co2.addNucleus(
+            8,
+            2.192,
+            0.0,
+            0.0
+        );
+
+        CartesianGrid co2Grid(
+            15,
+            15,
+            15,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9
+        );
+
+        const MolecularResult co2PZ81 =
+            solveMolecularSelfConsistentField(
+                co2Grid,
+                co2,
+                co2.getCharge(),
+                pz81
+            );
+
+        std::cout
+            << "\n"
+            << "CO2 | PZ81 | E = "
+            << std::scientific
+            << std::setprecision(10)
+            << co2PZ81.scf.energy.total
+            << " Ha\n";
+
         return 0;
     }
     catch (const std::exception& error)
