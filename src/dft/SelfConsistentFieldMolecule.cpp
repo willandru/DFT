@@ -295,11 +295,26 @@ std::vector<int> buildSpinOccupations(
     return occupations;
 }
 
+std::vector<MolecularOrbital> convertOrbitalsToSpin(
+    const std::vector<MolecularOrbital>& orbitals,
+    SpinChannel spin
+)
+{
+    std::vector<MolecularOrbital> converted =
+        orbitals;
+
+    for (MolecularOrbital& orbital : converted) {
+        orbital.spin = spin;
+    }
+
+    return converted;
+}
+
 /*
- * Ejecuta el solver molecular sin permitir que sus diagnósticos
+ * Ejecuta el solver molecular sin permitir que sus diagnosticos
  * internos lleguen a la salida principal.
  *
- * El solver conserva exactamente su cálculo y sus resultados.
+ * El solver conserva exactamente su calculo y sus resultados.
  */
 std::vector<MolecularOrbital> solveMolecularOrbitalsSilently(
     const CartesianGrid& grid,
@@ -486,14 +501,25 @@ void buildInitialMolecularDensities(
             SpinChannel::Alpha
         );
 
-    const std::vector<MolecularOrbital> betaOrbitals =
-        solveMolecularOrbitalsSilently(
-            grid,
-            nuclearPotential,
-            betaOccupations.size(),
-            betaOccupations,
-            SpinChannel::Beta
-        );
+    std::vector<MolecularOrbital> betaOrbitals;
+
+    if (alphaElectrons == betaElectrons) {
+        betaOrbitals =
+            convertOrbitalsToSpin(
+                alphaOrbitals,
+                SpinChannel::Beta
+            );
+    }
+    else {
+        betaOrbitals =
+            solveMolecularOrbitalsSilently(
+                grid,
+                nuclearPotential,
+                betaOccupations.size(),
+                betaOccupations,
+                SpinChannel::Beta
+            );
+    }
 
     alphaDensity =
         calculateMolecularSpinDensity(
@@ -583,6 +609,9 @@ MolecularResult solveMolecularSelfConsistentField(
 
     const int betaElectrons =
         electronCount / 2;
+
+    const bool closedShell =
+        alphaElectrons == betaElectrons;
 
     MolecularSCFTiming timing;
 
@@ -733,23 +762,36 @@ MolecularResult solveMolecularSelfConsistentField(
         timing.exchangeCorrelationAlpha +=
             iterationTiming.exchangeCorrelationAlpha;
 
-        start =
-            std::chrono::steady_clock::now();
+        std::vector<double> betaXCPotential;
 
-        const std::vector<double> betaXCPotential =
-            calculateMolecularSpinExchangeCorrelationPotential(
-                functional,
-                grid,
-                alphaDensity,
-                betaDensity,
-                1
-            );
+        if (closedShell) {
 
-        end =
-            std::chrono::steady_clock::now();
+            betaXCPotential =
+                alphaXCPotential;
 
-        iterationTiming.exchangeCorrelationBeta =
-            elapsedSeconds(start, end);
+            iterationTiming.exchangeCorrelationBeta =
+                0.0;
+        }
+        else {
+
+            start =
+                std::chrono::steady_clock::now();
+
+            betaXCPotential =
+                calculateMolecularSpinExchangeCorrelationPotential(
+                    functional,
+                    grid,
+                    alphaDensity,
+                    betaDensity,
+                    1
+                );
+
+            end =
+                std::chrono::steady_clock::now();
+
+            iterationTiming.exchangeCorrelationBeta =
+                elapsedSeconds(start, end);
+        }
 
         timing.exchangeCorrelationBeta +=
             iterationTiming.exchangeCorrelationBeta;
@@ -812,23 +854,39 @@ MolecularResult solveMolecularSelfConsistentField(
         timing.orbitalAlpha +=
             iterationTiming.orbitalAlpha;
 
-        start =
-            std::chrono::steady_clock::now();
+        std::vector<MolecularOrbital> betaOrbitals;
 
-        const std::vector<MolecularOrbital> betaOrbitals =
-            solveMolecularOrbitalsSilently(
-                grid,
-                betaPotential,
-                betaOccupations.size(),
-                betaOccupations,
-                SpinChannel::Beta
-            );
+        if (closedShell) {
 
-        end =
-            std::chrono::steady_clock::now();
+            betaOrbitals =
+                convertOrbitalsToSpin(
+                    alphaOrbitals,
+                    SpinChannel::Beta
+                );
 
-        iterationTiming.orbitalBeta =
-            elapsedSeconds(start, end);
+            iterationTiming.orbitalBeta =
+                0.0;
+        }
+        else {
+
+            start =
+                std::chrono::steady_clock::now();
+
+            betaOrbitals =
+                solveMolecularOrbitalsSilently(
+                    grid,
+                    betaPotential,
+                    betaOccupations.size(),
+                    betaOccupations,
+                    SpinChannel::Beta
+                );
+
+            end =
+                std::chrono::steady_clock::now();
+
+            iterationTiming.orbitalBeta =
+                elapsedSeconds(start, end);
+        }
 
         timing.orbitalBeta +=
             iterationTiming.orbitalBeta;
