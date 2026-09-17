@@ -31,6 +31,13 @@ struct AtomicOrbital {
     std::vector<double> u;
 };
 
+struct MolecularOrbital {
+    SpinChannel spin = SpinChannel::Alpha;
+    int electrons = 0;
+    double eigenvalue = 0.0;
+    std::vector<double> psi;
+};
+
 struct TridiagonalMatrix {
     std::vector<double> lower;
     std::vector<double> diagonal;
@@ -42,11 +49,13 @@ struct EnergyComponents {
     double external = 0.0;
     double hartree = 0.0;
     double exchangeCorrelation = 0.0;
+    double nuclearRepulsion = 0.0;
     double total = 0.0;
 };
 
 struct SCFResult {
     std::vector<AtomicOrbital> orbitals;
+    std::vector<MolecularOrbital> molecularOrbitals;
 
     std::vector<double> alphaDensity;
     std::vector<double> betaDensity;
@@ -70,6 +79,13 @@ struct AtomicResult {
     int Z = 0;
     std::string symbol;
     int electrons = 0;
+
+    SCFResult scf;
+};
+
+struct MolecularResult {
+    int electrons = 0;
+    int charge = 0;
 
     SCFResult scf;
 };

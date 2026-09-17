@@ -1,15 +1,16 @@
 #include "AtomicDFT.h"
-#include "DFTConstants.h"
-#include "ElectronicConfiguration.h"
+#include "CartesianGrid.h"
+#include "DFTData.h"
+#include "Molecule.h"
 #include "PBE96.h"
 #include "PZ81.h"
 #include "RadialGrid.h"
+#include "SelfConsistentField.h"
 
 #include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <string>
-#include <utility>
 #include <vector>
 
 struct FunctionalResults {
@@ -17,378 +18,496 @@ struct FunctionalResults {
     std::vector<AtomicResult> results;
 };
 
-static FunctionalResults runFunctional(
+void printSCFDiagnostics(const AtomicResult& result)
+{
+    const SCFResult& scf = result.scf;
+
+    std::cout << "  SCF iterations: " << scf.iterations << '\n';
+    std::cout << "  Converged:       "
+              << (scf.converged ? "yes" : "no") << '\n';
+    std::cout << "  Density diff:    "
+              << std::scientific << scf.densityDifference << '\n';
+    std::cout << "  Energy diff:     "
+              << std::scientific << scf.energyDifference << '\n';
+    std::cout << "  Max KS residual: "
+              << std::scientific << scf.maxKSResidual << '\n';
+}
+
+void printEnergyComponents(const EnergyComponents& energy)
+{
+    std::cout << std::fixed << std::setprecision(10);
+
+    std::cout << "  Kinetic:          " << energy.kinetic << '\n';
+    std::cout << "  External:         " << energy.external << '\n';
+    std::cout << "  Hartree:          " << energy.hartree << '\n';
+    std::cout << "  Exchange-corr.:   " << energy.exchangeCorrelation << '\n';
+    std::cout << "  Nuclear rep.:     " << energy.nuclearRepulsion << '\n';
+    std::cout << "  Total:            " << energy.total << '\n';
+}
+
+void printEnergyVerification(const EnergyComponents& energy)
+{
+    const double sum =
+        energy.kinetic +
+        energy.external +
+        energy.hartree +
+        energy.exchangeCorrelation +
+        energy.nuclearRepulsion;
+
+    const double difference = std::abs(sum - energy.total);
+
+    std::cout << "  Energy sum:       " << sum << '\n';
+    std::cout << "  Verification:     "
+              << std::scientific << difference << '\n';
+}
+
+AtomicConfiguration buildZincConfiguration()
+{
+    AtomicConfiguration configuration;
+
+    configuration.Z = 30;
+    configuration.symbol = "Zn";
+
+    configuration.states = {
+        {1, 0, 1, 1},
+        {2, 0, 1, 1},
+        {2, 1, 3, 3},
+        {3, 0, 1, 1},
+        {3, 1, 3, 3},
+        {4, 0, 1, 0}
+    };
+
+    return configuration;
+}
+
+AtomicResult runZinc(
+    const RadialGrid& grid,
+    const XCFunctional& functional)
+{
+    const AtomicConfiguration configuration =
+        buildZincConfiguration();
+
+    return solveAtom(
+        grid,
+        configuration,
+        functional
+    );
+}
+
+void printAtomicResult(
+    const std::string& functionalName,
+    const AtomicResult& result)
+{
+    std::cout << "\n========================================\n";
+    std::cout << "Atomic test: Zn\n";
+    std::cout << "Functional: " << functionalName << '\n';
+    std::cout << "========================================\n";
+
+    std::cout << "  Z:                " << result.Z << '\n';
+    std::cout << "  Symbol:           " << result.symbol << '\n';
+    std::cout << "  Electrons:        " << result.electrons << '\n';
+
+    printSCFDiagnostics(result);
+
+    std::cout << "\n  Energy components:\n";
+    printEnergyComponents(result.scf.energy);
+
+    std::cout << "\n  Energy verification:\n";
+    printEnergyVerification(result.scf.energy);
+}
+
+void printMolecularGeometry(
     const std::string& name,
+    const Molecule& molecule)
+{
+    std::cout << "\n========================================\n";
+    std::cout << name << '\n';
+    std::cout << "========================================\n";
+
+    std::cout << "Nuclei:    "
+              << molecule.getNucleusCount() << '\n';
+
+    std::cout << "Charge:    "
+              << molecule.getCharge() << '\n';
+
+    std::cout << "Electrons: "
+              << molecule.getElectronCount() << '\n';
+
+    std::cout << "\nGeometry (bohr):\n";
+
+    const auto& nuclei = molecule.getNuclei();
+
+    for (std::size_t i = 0; i < nuclei.size(); ++i)
+    {
+        std::cout
+            << "  Nucleus " << i
+            << ": Z=" << nuclei[i].atomicNumber
+            << "  ("
+            << nuclei[i].position[0] << ", "
+            << nuclei[i].position[1] << ", "
+            << nuclei[i].position[2] << ")\n";
+    }
+}
+
+void printMolecularResult(
+    const std::string& functionalName,
+    const MolecularResult& result)
+{
+    std::cout << "\nFunctional: "
+              << functionalName << '\n';
+
+    std::cout << "  Electrons:        "
+              << result.electrons << '\n';
+
+    std::cout << "  SCF iterations:   "
+              << result.scf.iterations << '\n';
+
+    std::cout << "  Converged:        "
+              << (result.scf.converged ? "yes" : "no") << '\n';
+
+    std::cout << "  Density diff:     "
+              << std::scientific
+              << result.scf.densityDifference << '\n';
+
+    std::cout << "  Energy diff:      "
+              << std::scientific
+              << result.scf.energyDifference << '\n';
+
+    std::cout << "  Max KS residual:  "
+              << std::scientific
+              << result.scf.maxKSResidual << '\n';
+
+    std::cout << "\n  Energy components:\n";
+    printEnergyComponents(result.scf.energy);
+
+    std::cout << "\n  Energy verification:\n";
+    printEnergyVerification(result.scf.energy);
+
+    std::cout << "\n  Molecular orbitals:\n";
+
+    for (std::size_t i = 0;
+         i < result.scf.molecularOrbitals.size();
+         ++i)
+    {
+        const MolecularOrbital& orbital =
+            result.scf.molecularOrbitals[i];
+
+        std::cout
+            << "    MO " << i
+            << "  electrons=" << orbital.electrons
+            << "  eigenvalue="
+            << std::scientific
+            << orbital.eigenvalue
+            << '\n';
+    }
+}
+
+void runMolecule(
+    const std::string& name,
+    const Molecule& molecule,
+    const CartesianGrid& grid,
     const XCFunctional& functional,
-    RadialGrid& grid,
-    const std::vector<int>& atomicNumbers
-) {
-    FunctionalResults output;
+    const std::string& functionalName)
+{
+    printMolecularGeometry(name, molecule);
 
-    output.name = name;
-    output.results.reserve(atomicNumbers.size());
-
-    std::cout
-        << "\n============================================================\n"
-        << " DFT ATOMICO | " << name << " | H-Zn\n"
-        << "============================================================\n"
-        << "Grid: "
-        << DFTConstants::GRID_POINTS
-        << " puntos | Rmax: "
-        << DFTConstants::RMAX
-        << " bohr\n\n";
-
-    for (int Z : atomicNumbers) {
-        const AtomicConfiguration configuration =
-            getAtomicConfiguration(Z);
-
-        std::cout
-            << "Calculando "
-            << configuration.symbol
-            << " (" << Z << ")... "
-            << std::flush;
-
-        AtomicResult result =
-            solveAtom(
-                grid,
-                configuration,
-                functional
-            );
-
-        output.results.push_back(
-            std::move(result)
+    const MolecularResult result =
+        solveMolecularSelfConsistentField(
+            grid,
+            molecule,
+            molecule.getCharge(),
+            functional
         );
 
-        const AtomicResult& solved =
-            output.results.back();
-
-        int alphaElectrons = 0;
-        int betaElectrons = 0;
-
-        for (const AtomicOrbital& orbital :
-             solved.scf.orbitals) {
-
-            if (orbital.spin == SpinChannel::Alpha) {
-                alphaElectrons += orbital.electrons;
-            } else {
-                betaElectrons += orbital.electrons;
-            }
-        }
-
-        std::cout
-            << (solved.scf.converged ? "OK" : "NO")
-            << "  E = "
-            << std::scientific
-            << std::setprecision(10)
-            << solved.scf.energy.total
-            << " Ha"
-            << "  N = "
-            << solved.electrons
-            << " ("
-            << alphaElectrons
-            << "+"
-            << betaElectrons
-            << ")"
-            << "  iter = "
-            << solved.scf.iterations
-            << '\n';
-    }
-
-    return output;
+    printMolecularResult(
+        functionalName,
+        result
+    );
 }
 
-static void printSCFDiagnostics(
-    const FunctionalResults& functionalResults
-) {
-    std::cout
-        << "\n============================================================\n"
-        << " DIAGNOSTICO SCF | "
-        << functionalResults.name
-        << "\n"
-        << "============================================================\n";
+int main()
+{
+    try
+    {
+        std::cout << std::setprecision(10);
 
-    std::cout
-        << "Atom   Iter       dRho           dE             KS_res\n"
-        << "------------------------------------------------------------\n";
+        /*
+         * ============================================================
+         * ATOMIC TEST
+         * ============================================================
+         *
+         * Only Zn is tested.
+         */
 
-    for (const AtomicResult& result :
-         functionalResults.results) {
+        std::cout << "\n";
+        std::cout << "########################################\n";
+        std::cout << "# ATOMIC DFT TEST - Zn\n";
+        std::cout << "########################################\n";
 
-        std::cout
-            << std::left
-            << std::setw(7)
-            << result.symbol
-            << std::setw(11)
-            << result.scf.iterations
-            << std::scientific
-            << std::setprecision(6)
-            << std::setw(15)
-            << result.scf.densityDifference
-            << std::setw(15)
-            << result.scf.energyDifference
-            << std::setw(15)
-            << result.scf.maxKSResidual
-            << '\n';
-    }
-}
-
-static void printEnergyComponents(
-    const FunctionalResults& functionalResults
-) {
-    std::cout
-        << "\n============================================================\n"
-        << " ENERGIAS POR COMPONENTE | "
-        << functionalResults.name
-        << "\n"
-        << "============================================================\n";
-
-    std::cout
-        << std::scientific
-        << std::setprecision(10);
-
-    std::cout
-        << "Atom        Ts              Eext            EH"
-        << "             Exc             Etot\n"
-        << "--------------------------------------------------------------------------\n";
-
-    for (const AtomicResult& result :
-         functionalResults.results) {
-
-        const EnergyComponents& energy =
-            result.scf.energy;
-
-        std::cout
-            << std::left
-            << std::setw(5)
-            << result.symbol
-            << std::right
-            << std::setw(17)
-            << energy.kinetic
-            << std::setw(17)
-            << energy.external
-            << std::setw(17)
-            << energy.hartree
-            << std::setw(17)
-            << energy.exchangeCorrelation
-            << std::setw(17)
-            << energy.total
-            << '\n';
-    }
-}
-
-static void printEnergyVerification(
-    const FunctionalResults& functionalResults
-) {
-    std::cout
-        << "\n============================================================\n"
-        << " VERIFICACION DE LA SUMA | "
-        << functionalResults.name
-        << "\n"
-        << "============================================================\n";
-
-    std::cout
-        << "Atom        Ts+Eext+EH+Exc        Etot"
-        << "                 Diferencia\n"
-        << "--------------------------------------------------------------------------\n";
-
-    std::cout
-        << std::scientific
-        << std::setprecision(10);
-
-    for (const AtomicResult& result :
-         functionalResults.results) {
-
-        const EnergyComponents& energy =
-            result.scf.energy;
-
-        const double reconstructed =
-            energy.kinetic
-            + energy.external
-            + energy.hartree
-            + energy.exchangeCorrelation;
-
-        const double difference =
-            reconstructed - energy.total;
-
-        std::cout
-            << std::left
-            << std::setw(5)
-            << result.symbol
-            << std::right
-            << std::setw(22)
-            << reconstructed
-            << std::setw(17)
-            << energy.total
-            << std::setw(20)
-            << difference
-            << '\n';
-    }
-}
-
-static void printFunctionalComparison(
-    const FunctionalResults& pz81Results,
-    const FunctionalResults& pbe96Results,
-    const std::vector<int>& atomicNumbers
-) {
-    std::cout
-        << "\n============================================================\n"
-        << " COMPARACION PZ81 vs PBE96 | ENERGIA TOTAL\n"
-        << "============================================================\n";
-
-    std::cout
-        << "Atom        Z"
-        << "          E_PZ81 (Ha)"
-        << "          E_PBE96 (Ha)"
-        << "          PBE-PZ (Ha)"
-        << "        |Delta E|\n"
-        << "--------------------------------------------------------------------------------\n";
-
-    std::cout
-        << std::scientific
-        << std::setprecision(10);
-
-    const std::size_t count =
-        std::min(
-            {
-                pz81Results.results.size(),
-                pbe96Results.results.size(),
-                atomicNumbers.size()
-            }
-        );
-
-    for (std::size_t i = 0; i < count; ++i) {
-        const AtomicResult& pz =
-            pz81Results.results[i];
-
-        const AtomicResult& pbe =
-            pbe96Results.results[i];
-
-        const double energyPZ =
-            pz.scf.energy.total;
-
-        const double energyPBE =
-            pbe.scf.energy.total;
-
-        const double difference =
-            energyPBE - energyPZ;
-
-        std::cout
-            << std::left
-            << std::setw(5)
-            << pz.symbol
-            << std::right
-            << std::setw(8)
-            << atomicNumbers[i]
-            << std::setw(20)
-            << energyPZ
-            << std::setw(20)
-            << energyPBE
-            << std::setw(20)
-            << difference
-            << std::setw(18)
-            << std::abs(difference)
-            << '\n';
-    }
-}
-
-int main() {
-    try {
-        RadialGrid grid(
-            DFTConstants::GRID_POINTS,
-            DFTConstants::RMAX
+        const RadialGrid radialGrid(
+            2000,
+            40.0
         );
 
         PZ81 pz81;
         PBE96 pbe96;
 
-        const std::vector<int> atomicNumbers = {
-            1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
-            11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-            21, 22, 23, 24, 25, 26, 27, 28, 29, 30
-        };
-
-        /*
-         * ========================================================
-         * 1. PZ81
-         * ========================================================
-         */
-
-        FunctionalResults pz81Results =
-            runFunctional(
-                "PZ81",
-                pz81,
-                grid,
-                atomicNumbers
+        const AtomicResult zincPZ81 =
+            runZinc(
+                radialGrid,
+                pz81
             );
 
-        printSCFDiagnostics(
-            pz81Results
-        );
-
-        printEnergyComponents(
-            pz81Results
-        );
-
-        printEnergyVerification(
-            pz81Results
-        );
-
-        /*
-         * ========================================================
-         * 2. PBE96
-         * ========================================================
-         */
-
-        FunctionalResults pbe96Results =
-            runFunctional(
-                "PBE96",
-                pbe96,
-                grid,
-                atomicNumbers
+        const AtomicResult zincPBE96 =
+            runZinc(
+                radialGrid,
+                pbe96
             );
 
-        printSCFDiagnostics(
-            pbe96Results
+        printAtomicResult(
+            "PZ81",
+            zincPZ81
         );
 
-        printEnergyComponents(
-            pbe96Results
-        );
-
-        printEnergyVerification(
-            pbe96Results
+        printAtomicResult(
+            "PBE96",
+            zincPBE96
         );
 
         /*
-         * ========================================================
-         * 3. COMPARACION FINAL
-         * ========================================================
+         * ============================================================
+         * MOLECULAR DFT TEST
+         * ============================================================
          */
 
-        printFunctionalComparison(
-            pz81Results,
-            pbe96Results,
-            atomicNumbers
+        std::cout << "\n\n";
+        std::cout << "########################################\n";
+        std::cout << "# MOLECULAR DFT TEST\n";
+        std::cout << "########################################\n";
+
+        /*
+         * Reduced molecular grid for debugging.
+         *
+         * Original:
+         * 41 x 41 x 41
+         *
+         * Current diagnostic:
+         * 11 x 11 x 11
+         */
+        const CartesianGrid molecularGrid(
+            11,
+            11,
+            11,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9
         );
 
-        std::cout
-            << "\n============================================================\n"
-            << " CALCULO COMPLETADO\n"
-            << "============================================================\n\n";
+        /*
+         * H2
+         */
+
+        Molecule h2(0);
+
+        h2.addNucleus(
+            1,
+            -0.7,
+            0.0,
+            0.0
+        );
+
+        h2.addNucleus(
+            1,
+            0.7,
+            0.0,
+            0.0
+        );
+
+        /*
+         * H2O
+         */
+
+        Molecule h2o(0);
+
+        h2o.addNucleus(
+            8,
+            0.0,
+            0.0,
+            0.0
+        );
+
+        h2o.addNucleus(
+            1,
+            1.43,
+            0.0,
+            1.107
+        );
+
+        h2o.addNucleus(
+            1,
+            -1.43,
+            0.0,
+            1.107
+        );
+
+        /*
+         * CO2
+         */
+
+        Molecule co2(0);
+
+        co2.addNucleus(
+            8,
+            -2.20,
+            0.0,
+            0.0
+        );
+
+        co2.addNucleus(
+            6,
+            0.0,
+            0.0,
+            0.0
+        );
+
+        co2.addNucleus(
+            8,
+            2.20,
+            0.0,
+            0.0
+        );
+
+        /*
+         * N2
+         */
+
+        Molecule n2(0);
+
+        n2.addNucleus(
+            7,
+            -1.04,
+            0.0,
+            0.0
+        );
+
+        n2.addNucleus(
+            7,
+            1.04,
+            0.0,
+            0.0
+        );
+
+        /*
+         * H2 - PZ81
+         */
+
+        runMolecule(
+            "H2",
+            h2,
+            molecularGrid,
+            pz81,
+            "PZ81"
+        );
+
+        /*
+         * H2 - PBE96
+         */
+
+        runMolecule(
+            "H2",
+            h2,
+            molecularGrid,
+            pbe96,
+            "PBE96"
+        );
+
+        /*
+         * H2O - PZ81
+         */
+
+        runMolecule(
+            "H2O",
+            h2o,
+            molecularGrid,
+            pz81,
+            "PZ81"
+        );
+
+        /*
+         * H2O - PBE96
+         */
+
+        runMolecule(
+            "H2O",
+            h2o,
+            molecularGrid,
+            pbe96,
+            "PBE96"
+        );
+
+        /*
+         * CO2 - PZ81
+         */
+
+        runMolecule(
+            "CO2",
+            co2,
+            molecularGrid,
+            pz81,
+            "PZ81"
+        );
+
+        /*
+         * CO2 - PBE96
+         */
+
+        runMolecule(
+            "CO2",
+            co2,
+            molecularGrid,
+            pbe96,
+            "PBE96"
+        );
+
+        /*
+         * N2 - PZ81
+         */
+
+        runMolecule(
+            "N2",
+            n2,
+            molecularGrid,
+            pz81,
+            "PZ81"
+        );
+
+        /*
+         * N2 - PBE96
+         */
+
+        runMolecule(
+            "N2",
+            n2,
+            molecularGrid,
+            pbe96,
+            "PBE96"
+        );
+
+        std::cout << "\n";
+        std::cout << "########################################\n";
+        std::cout << "# DFT TEST COMPLETED\n";
+        std::cout << "########################################\n";
 
         return 0;
     }
-    catch (const std::exception& error) {
-        std::cerr
-            << "\nERROR: "
-            << error.what()
-            << '\n';
-
-        return 1;
-    }
-    catch (...) {
-        std::cerr
-            << "\nERROR: excepcion desconocida.\n";
+    catch (const std::exception& exception)
+    {
+        std::cerr << "\nERROR: "
+                  << exception.what()
+                  << '\n';
 
         return 1;
     }
