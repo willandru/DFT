@@ -68,8 +68,7 @@ TridiagonalMatrix buildKohnShamHamiltonian(
          i < n;
          ++i) {
 
-        const double ri =
-            r[i];
+        const double ri = r[i];
 
         if (ri <= 0.0) {
             throw std::invalid_argument(

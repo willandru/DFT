@@ -7,7 +7,6 @@
 #include "HartreePotential.h"
 #include "KohnShamHamiltonian.h"
 #include "NumericalMethods.h"
-#include "NuclearPotential.h"
 #include "TotalEnergy.h"
 
 #include <algorithm>
@@ -67,8 +66,7 @@ std::vector<AtomicOrbital> solveSpinOrbitals(
                 stateIndex
             );
 
-        orbital.spin =
-            spin;
+        orbital.spin = spin;
 
         orbitals.push_back(
             std::move(orbital)
@@ -193,8 +191,7 @@ double calculateMaximumKSResidual(
 
         residualNorm =
             std::sqrt(
-                residualNorm *
-                dr
+                residualNorm * dr
             );
 
         maximumResidual =
@@ -237,15 +234,9 @@ void buildInitialSpinOrbitals(
         if (state.alphaElectrons > 0) {
             AtomicOrbital orbital;
 
-            orbital.n =
-                state.n;
-
-            orbital.l =
-                state.l;
-
-            orbital.spin =
-                SpinChannel::Alpha;
-
+            orbital.n = state.n;
+            orbital.l = state.l;
+            orbital.spin = SpinChannel::Alpha;
             orbital.electrons =
                 state.alphaElectrons;
 
@@ -280,15 +271,9 @@ void buildInitialSpinOrbitals(
         if (state.betaElectrons > 0) {
             AtomicOrbital orbital;
 
-            orbital.n =
-                state.n;
-
-            orbital.l =
-                state.l;
-
-            orbital.spin =
-                SpinChannel::Beta;
-
+            orbital.n = state.n;
+            orbital.l = state.l;
+            orbital.spin = SpinChannel::Beta;
             orbital.electrons =
                 state.betaElectrons;
 
@@ -484,14 +469,12 @@ double calculateDensityDifference(
 
     const double differenceNorm =
         std::sqrt(
-            differenceNormSquared *
-            dr
+            differenceNormSquared * dr
         );
 
     const double densityNorm =
         std::sqrt(
-            densityNormSquared *
-            dr
+            densityNormSquared * dr
         );
 
     if (densityNorm <= DFTConstants::EPS) {
@@ -754,9 +737,7 @@ SCFResult solveSelfConsistentField(
             residual <
                 DFTConstants::KS_RESIDUAL_TOL) {
 
-            result.converged =
-                true;
-
+            result.converged = true;
             break;
         }
 
@@ -768,8 +749,7 @@ SCFResult solveSelfConsistentField(
                 mixing =
                     std::max(
                         MIN_MIXING,
-                        mixing *
-                        MIXING_DECREASE
+                        mixing * MIXING_DECREASE
                     );
             }
             else if (effectiveDensityDifference <
@@ -778,8 +758,7 @@ SCFResult solveSelfConsistentField(
                 mixing =
                     std::min(
                         MAX_MIXING,
-                        mixing *
-                        MIXING_INCREASE
+                        mixing * MIXING_INCREASE
                     );
             }
         }

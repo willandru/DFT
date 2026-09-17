@@ -6,7 +6,6 @@
 
 #include <cmath>
 #include <stdexcept>
-#include <vector>
 
 double calculateKineticEnergy(
     const std::vector<double>& r,
@@ -156,10 +155,10 @@ double calculateExternalEnergy(
             i == r.size() - 1) {
 
             energy +=
-                0.5 *
-                integrand;
-        }
-        else {
+                0.5 * integrand;
+
+        } else {
+
             energy +=
                 integrand;
         }

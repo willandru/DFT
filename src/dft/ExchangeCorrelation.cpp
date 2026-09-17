@@ -2,7 +2,6 @@
 
 #include "DFTConstants.h"
 
-#include <cmath>
 #include <stdexcept>
 #include <vector>
 
@@ -13,7 +12,8 @@ double calculateRadialGradient(
     const std::vector<double>& density,
     std::size_t i
 ) {
-    const std::size_t size = r.size();
+    const std::size_t size =
+        r.size();
 
     if (i == 0) {
         return
@@ -55,7 +55,8 @@ double calculateRadialDivergence(
     const std::vector<double>& coefficient,
     std::size_t i
 ) {
-    const std::size_t size = r.size();
+    const std::size_t size =
+        r.size();
 
     if (size < 2) {
         throw std::invalid_argument(
@@ -69,14 +70,10 @@ double calculateRadialDivergence(
 
     if (i == 0) {
         const double radialValue0 =
-            r[0] *
-            r[0] *
-            coefficient[0];
+            r[0] * r[0] * coefficient[0];
 
         const double radialValue1 =
-            r[1] *
-            r[1] *
-            coefficient[1];
+            r[1] * r[1] * coefficient[1];
 
         const double derivative =
             (
@@ -91,8 +88,7 @@ double calculateRadialDivergence(
         return
             derivative /
             (
-                r[0] *
-                r[0]
+                r[0] * r[0]
             );
     }
 
@@ -229,8 +225,7 @@ std::vector<double> calculateSpinExchangeCorrelationPotential(
 
             gradientCoefficient[i] =
                 result.gradientCoefficientAlpha;
-        }
-        else {
+        } else {
             densityDerivative[i] =
                 result.potentialBeta;
 
@@ -364,12 +359,11 @@ double calculateSpinExchangeCorrelationEnergy(
             i == r.size() - 1) {
 
             energy +=
-                0.5 *
-                integrand;
-        }
-        else {
-            energy +=
-                integrand;
+                0.5 * integrand;
+
+        } else {
+
+            energy += integrand;
         }
     }
 

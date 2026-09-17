@@ -1,19 +1,14 @@
 #include "EigenvalueSolver.h"
 
 #include "DFTConstants.h"
-#include "KohnShamHamiltonian.h"
 #include "NumericalMethods.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <utility>
-#include <vector>
 
 namespace {
-
-constexpr double RADIAL_EIGENVALUE_TOLERANCE = 1.0e-13;
 
 double sturmPivot(
     const TridiagonalMatrix& matrix,
@@ -37,7 +32,7 @@ double sturmPivot(
         previous;
 }
 
-} // namespace
+}
 
 std::size_t countEigenvaluesBelow(
     const TridiagonalMatrix& matrix,
@@ -49,7 +44,6 @@ std::size_t countEigenvaluesBelow(
     if (n == 0 ||
         matrix.lower.size() != n - 1 ||
         matrix.upper.size() != n - 1) {
-
         throw std::invalid_argument(
             "Matriz tridiagonal invalida."
         );
@@ -58,29 +52,21 @@ std::size_t countEigenvaluesBelow(
     std::size_t count = 0;
 
     double previous =
-        matrix.diagonal[0] -
-        energy;
+        matrix.diagonal[0] - energy;
 
     if (previous < 0.0) {
         ++count;
     }
 
-    if (std::abs(previous) <
-        DFTConstants::EPS) {
-
+    if (std::abs(previous) < DFTConstants::EPS) {
         previous =
             std::copysign(
                 DFTConstants::EPS,
-                previous == 0.0
-                    ? 1.0
-                    : previous
+                previous == 0.0 ? 1.0 : previous
             );
     }
 
-    for (std::size_t i = 1;
-         i < n;
-         ++i) {
-
+    for (std::size_t i = 1; i < n; ++i) {
         const double pivot =
             sturmPivot(
                 matrix,
@@ -94,13 +80,10 @@ std::size_t countEigenvaluesBelow(
         }
 
         previous =
-            std::abs(pivot) <
-                DFTConstants::EPS
+            std::abs(pivot) < DFTConstants::EPS
                 ? std::copysign(
                     DFTConstants::EPS,
-                    pivot == 0.0
-                        ? 1.0
-                        : pivot
+                    pivot == 0.0 ? 1.0 : pivot
                 )
                 : pivot;
     }
@@ -120,7 +103,6 @@ double findEigenvalue(
     if (n == 0 ||
         matrix.lower.size() != n - 1 ||
         matrix.upper.size() != n - 1) {
-
         throw std::invalid_argument(
             "Matriz tridiagonal invalida."
         );
@@ -134,7 +116,7 @@ double findEigenvalue(
 
     if (lowerBound >= upperBound) {
         throw std::invalid_argument(
-            "Intervalo invalido para la busqueda."
+            "Intervalo invalido para la busqueda del autovalor."
         );
     }
 
@@ -165,14 +147,12 @@ double findEigenvalue(
 
         if (lowCount <= index &&
             index < highCount) {
-
             break;
         }
 
         width *= 2.0;
 
         if (lowCount > index) {
-
             low -= width;
 
             lowCount =
@@ -183,7 +163,6 @@ double findEigenvalue(
         }
 
         if (highCount <= index) {
-
             high += width;
 
             highCount =
@@ -196,7 +175,6 @@ double findEigenvalue(
 
     if (lowCount > index ||
         index >= highCount) {
-
         throw std::runtime_error(
             "No se pudo acotar el autovalor solicitado."
         );
@@ -218,13 +196,12 @@ double findEigenvalue(
 
         if (count <= index) {
             low = mid;
-        }
-        else {
+        } else {
             high = mid;
         }
 
         const double tolerance =
-            RADIAL_EIGENVALUE_TOLERANCE *
+            1.0e-13 *
             std::max(
                 1.0,
                 std::max(
@@ -254,7 +231,6 @@ std::vector<double> solveEigenvector(
     if (n == 0 ||
         matrix.lower.size() != n - 1 ||
         matrix.upper.size() != n - 1) {
-
         throw std::invalid_argument(
             "Matriz tridiagonal invalida."
         );
@@ -262,10 +238,7 @@ std::vector<double> solveEigenvector(
 
     std::vector<double> vector(n);
 
-    for (std::size_t i = 0;
-         i < n;
-         ++i) {
-
+    for (std::size_t i = 0; i < n; ++i) {
         vector[i] =
             std::sin(
                 static_cast<double>(i + 1)
@@ -298,7 +271,6 @@ std::vector<double> solveEigenvector(
 
     for (double& value :
          shifted.diagonal) {
-
         value -= shift;
     }
 
@@ -326,7 +298,6 @@ std::vector<double> solveEigenvector(
         }
 
         if (dotProduct(vector, next) < 0.0) {
-
             for (double& value : next) {
                 value = -value;
             }
@@ -359,15 +330,13 @@ AtomicOrbital solveOrbital(
 ) {
     if (matrix.diagonal.size() != r.size()) {
         throw std::invalid_argument(
-            "La matriz y la malla radial deben "
-            "tener el mismo tamano."
+            "La matriz y la malla radial deben tener el mismo tamano."
         );
     }
 
     if (r.size() < 2) {
         throw std::invalid_argument(
-            "La malla radial debe contener al menos "
-            "dos puntos."
+            "La malla radial debe contener al menos dos puntos."
         );
     }
 
@@ -389,12 +358,18 @@ AtomicOrbital solveOrbital(
             matrix.diagonal.end()
         );
 
+    const double lowerBound =
+        minimum - 10.0;
+
+    const double upperBound =
+        maximum + 10.0;
+
     const double eigenvalue =
         findEigenvalue(
             matrix,
             orbitalIndex,
-            minimum - 10.0,
-            maximum + 10.0
+            lowerBound,
+            upperBound
         );
 
     std::vector<double> u =
