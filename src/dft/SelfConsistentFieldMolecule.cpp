@@ -285,6 +285,10 @@ std::vector<int> buildSpinOccupations(
 
     std::vector<int> occupations;
 
+    occupations.reserve(
+        static_cast<std::size_t>(electronCount)
+    );
+
     for (int i = 0;
          i < electronCount;
          ++i) {
@@ -314,14 +318,16 @@ std::vector<MolecularOrbital> convertOrbitalsToSpin(
  * Ejecuta el solver molecular sin permitir que sus diagnosticos
  * internos lleguen a la salida principal.
  *
- * El solver conserva exactamente su calculo y sus resultados.
+ * initialOrbitals contiene la solucion orbital de la iteracion
+ * SCF anterior cuando esta disponible.
  */
 std::vector<MolecularOrbital> solveMolecularOrbitalsSilently(
     const CartesianGrid& grid,
     const std::vector<double>& potential,
     std::size_t orbitalCount,
     const std::vector<int>& occupations,
-    SpinChannel spin
+    SpinChannel spin,
+    const std::vector<MolecularOrbital>& initialOrbitals
 )
 {
     std::ostringstream suppressedOutput;
@@ -339,7 +345,8 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsSilently(
                 potential,
                 orbitalCount,
                 occupations,
-                spin
+                spin,
+                initialOrbitals
             );
 
         std::cout.rdbuf(originalBuffer);
@@ -473,7 +480,9 @@ void buildInitialMolecularDensities(
     int alphaElectrons,
     int betaElectrons,
     std::vector<double>& alphaDensity,
-    std::vector<double>& betaDensity
+    std::vector<double>& betaDensity,
+    std::vector<MolecularOrbital>& initialAlphaOrbitals,
+    std::vector<MolecularOrbital>& initialBetaOrbitals
 )
 {
     const std::vector<double> nuclearPotential =
@@ -492,44 +501,50 @@ void buildInitialMolecularDensities(
             betaElectrons
         );
 
-    const std::vector<MolecularOrbital> alphaOrbitals =
+    /*
+     * La inicializacion no tiene orbitales previos.
+     * Por eso se envia un vector vacio como initialOrbitals.
+     */
+    initialAlphaOrbitals =
         solveMolecularOrbitalsSilently(
             grid,
             nuclearPotential,
             alphaOccupations.size(),
             alphaOccupations,
-            SpinChannel::Alpha
+            SpinChannel::Alpha,
+            std::vector<MolecularOrbital>{}
         );
 
-    std::vector<MolecularOrbital> betaOrbitals;
-
     if (alphaElectrons == betaElectrons) {
-        betaOrbitals =
+
+        initialBetaOrbitals =
             convertOrbitalsToSpin(
-                alphaOrbitals,
+                initialAlphaOrbitals,
                 SpinChannel::Beta
             );
     }
     else {
-        betaOrbitals =
+
+        initialBetaOrbitals =
             solveMolecularOrbitalsSilently(
                 grid,
                 nuclearPotential,
                 betaOccupations.size(),
                 betaOccupations,
-                SpinChannel::Beta
+                SpinChannel::Beta,
+                std::vector<MolecularOrbital>{}
             );
     }
 
     alphaDensity =
         calculateMolecularSpinDensity(
-            alphaOrbitals,
+            initialAlphaOrbitals,
             SpinChannel::Alpha
         );
 
     betaDensity =
         calculateMolecularSpinDensity(
-            betaOrbitals,
+            initialBetaOrbitals,
             SpinChannel::Beta
         );
 }
@@ -630,13 +645,23 @@ MolecularResult solveMolecularSelfConsistentField(
     std::vector<double> alphaDensity;
     std::vector<double> betaDensity;
 
+    /*
+     * Estos orbitales son la solucion del problema orbital
+     * inicial y posteriormente se reutilizan como guess
+     * entre iteraciones SCF.
+     */
+    std::vector<MolecularOrbital> previousAlphaOrbitals;
+    std::vector<MolecularOrbital> previousBetaOrbitals;
+
     buildInitialMolecularDensities(
         grid,
         molecule,
         alphaElectrons,
         betaElectrons,
         alphaDensity,
-        betaDensity
+        betaDensity,
+        previousAlphaOrbitals,
+        previousBetaOrbitals
     );
 
     const auto initializationEnd =
@@ -836,13 +861,20 @@ MolecularResult solveMolecularSelfConsistentField(
         start =
             std::chrono::steady_clock::now();
 
+        /*
+         * Reutiliza los orbitales de la iteracion SCF anterior.
+         *
+         * En la primera iteracion, previousAlphaOrbitals contiene
+         * los orbitales calculados durante la inicializacion.
+         */
         const std::vector<MolecularOrbital> alphaOrbitals =
             solveMolecularOrbitalsSilently(
                 grid,
                 alphaPotential,
                 alphaOccupations.size(),
                 alphaOccupations,
-                SpinChannel::Alpha
+                SpinChannel::Alpha,
+                previousAlphaOrbitals
             );
 
         end =
@@ -858,6 +890,10 @@ MolecularResult solveMolecularSelfConsistentField(
 
         if (closedShell) {
 
+            /*
+             * En capa cerrada Alpha y Beta son identicos en
+             * magnitud y solo cambia el canal de spin.
+             */
             betaOrbitals =
                 convertOrbitalsToSpin(
                     alphaOrbitals,
@@ -878,7 +914,8 @@ MolecularResult solveMolecularSelfConsistentField(
                     betaPotential,
                     betaOccupations.size(),
                     betaOccupations,
-                    SpinChannel::Beta
+                    SpinChannel::Beta,
+                    previousBetaOrbitals
                 );
 
             end =
@@ -1106,6 +1143,22 @@ MolecularResult solveMolecularSelfConsistentField(
                 DFTConstants::ENERGY_TOL &&
             residual <
                 DFTConstants::KS_RESIDUAL_TOL;
+
+        /*
+         * Los orbitales calculados pasan a ser el guess de la
+         * siguiente iteracion SCF.
+         */
+        if (!converged) {
+
+            previousAlphaOrbitals =
+                alphaOrbitals;
+
+            if (!closedShell) {
+
+                previousBetaOrbitals =
+                    betaOrbitals;
+            }
+        }
 
         if (converged) {
 
