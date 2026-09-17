@@ -1,20 +1,21 @@
 #pragma once
 
+#include "CartesianGrid.h"
 #include "XCFunctional.h"
 
 #include <vector>
 
-std::vector<double> calculateSpinExchangeCorrelationPotential(
+std::vector<double> calculateMolecularSpinExchangeCorrelationPotential(
     const XCFunctional& functional,
-    const std::vector<double>& r,
+    const CartesianGrid& grid,
     const std::vector<double>& alphaDensity,
     const std::vector<double>& betaDensity,
     int spin
 );
 
-double calculateSpinExchangeCorrelationEnergy(
+double calculateMolecularExchangeCorrelationEnergy(
     const XCFunctional& functional,
-    const std::vector<double>& r,
+    const CartesianGrid& grid,
     const std::vector<double>& alphaDensity,
     const std::vector<double>& betaDensity
 );
