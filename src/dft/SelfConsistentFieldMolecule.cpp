@@ -23,8 +23,10 @@ namespace {
 
 constexpr double MIN_MIXING = 0.10;
 constexpr double MAX_MIXING = 0.50;
+
 constexpr double MIXING_INCREASE = 1.10;
-constexpr double MIXING_DECREASE = 0.50;
+constexpr double MIXING_DECREASE = 0.75;
+
 constexpr double OSCILLATION_FACTOR = 1.05;
 
 struct MolecularSCFTiming
@@ -77,6 +79,33 @@ struct MolecularSCFIterationTiming
     double mixing = 0.0;
 
     double total = 0.0;
+};
+
+struct MolecularSCFConvergenceAnalysis
+{
+    int lastEnergyCriterionIteration = 0;
+    int lastDensityCriterionIteration = 0;
+    int lastKSCriterionIteration = 0;
+
+    double finalEnergyDifference =
+        std::numeric_limits<double>::infinity();
+
+    double finalDensityDifference =
+        std::numeric_limits<double>::infinity();
+
+    double finalKSResidual =
+        std::numeric_limits<double>::infinity();
+
+    double finalMixing = 0.0;
+
+    double minimumEnergyDifference =
+        std::numeric_limits<double>::infinity();
+
+    double minimumDensityDifference =
+        std::numeric_limits<double>::infinity();
+
+    double minimumKSResidual =
+        std::numeric_limits<double>::infinity();
 };
 
 double elapsedSeconds(
@@ -314,13 +343,6 @@ std::vector<MolecularOrbital> convertOrbitalsToSpin(
     return converted;
 }
 
-/*
- * Ejecuta el solver molecular sin permitir que sus diagnosticos
- * internos lleguen a la salida principal.
- *
- * initialOrbitals contiene la solucion orbital de la iteracion
- * SCF anterior cuando esta disponible.
- */
 std::vector<MolecularOrbital> solveMolecularOrbitalsSilently(
     const CartesianGrid& grid,
     const std::vector<double>& potential,
@@ -365,11 +387,11 @@ void printSCFHeader()
 {
     std::cout
         << "\n"
-        << "==============================================================================================================\n"
+        << "========================================================================================================================\n"
         << "SCF MOLECULAR\n"
-        << "==============================================================================================================\n"
+        << "========================================================================================================================\n"
         << "Iter | E (Ha)         | dE         | dRho      | KS        | Mix   | E Alpha      | E Beta       | tA(ms) | tB(ms) | tSCF(s)\n"
-        << "-----|----------------|------------|-----------|-----------|-------|--------------|--------------|--------|--------|--------\n";
+        << "-----|----------------|------------|-----------|-----------|-------|--------------|--------------|--------|--------|---------\n";
 }
 
 void printSCFIteration(
@@ -469,7 +491,9 @@ void printSCFIteration(
         << std::setw(6)
         << betaTime * 1000.0
         << " | "
-        << std::setw(7)
+        << std::fixed
+        << std::setprecision(6)
+        << std::setw(8)
         << iterationTime
         << "\n";
 }
@@ -501,10 +525,6 @@ void buildInitialMolecularDensities(
             betaElectrons
         );
 
-    /*
-     * La inicializacion no tiene orbitales previos.
-     * Por eso se envia un vector vacio como initialOrbitals.
-     */
     initialAlphaOrbitals =
         solveMolecularOrbitalsSilently(
             grid,
@@ -564,6 +584,100 @@ void printTimeLine(
         << std::setw(12)
         << seconds * 1000.0
         << " ms\n";
+}
+
+void printConvergenceAnalysis(
+    const MolecularSCFConvergenceAnalysis& analysis
+)
+{
+    std::cout
+        << "\n"
+        << "========================================================================================================================\n"
+        << "SCF CONVERGENCE ANALYSIS\n"
+        << "========================================================================================================================\n";
+
+    std::cout
+        << std::scientific
+        << std::setprecision(6);
+
+    std::cout
+        << "DENSITY_TOL       : "
+        << DFTConstants::DENSITY_TOL
+        << "\n";
+
+    std::cout
+        << "ENERGY_TOL        : "
+        << DFTConstants::ENERGY_TOL
+        << "\n";
+
+    std::cout
+        << "KS_RESIDUAL_TOL   : "
+        << DFTConstants::KS_RESIDUAL_TOL
+        << "\n";
+
+    std::cout
+        << "------------------------------------------------------------------------------------------------------------------------\n";
+
+    std::cout
+        << "Ultima iteracion con dE   < ENERGY_TOL      : "
+        << analysis.lastEnergyCriterionIteration
+        << "\n";
+
+    std::cout
+        << "Ultima iteracion con dRho < DENSITY_TOL     : "
+        << analysis.lastDensityCriterionIteration
+        << "\n";
+
+    std::cout
+        << "Ultima iteracion con KS   < KS_RESIDUAL_TOL : "
+        << analysis.lastKSCriterionIteration
+        << "\n";
+
+    std::cout
+        << "------------------------------------------------------------------------------------------------------------------------\n";
+
+    std::cout
+        << "Minimo dE   observado     : "
+        << analysis.minimumEnergyDifference
+        << "\n";
+
+    std::cout
+        << "Minimo dRho observado     : "
+        << analysis.minimumDensityDifference
+        << "\n";
+
+    std::cout
+        << "Minimo KS observado       : "
+        << analysis.minimumKSResidual
+        << "\n";
+
+    std::cout
+        << "------------------------------------------------------------------------------------------------------------------------\n";
+
+    std::cout
+        << "Valor final dE            : "
+        << analysis.finalEnergyDifference
+        << "\n";
+
+    std::cout
+        << "Valor final dRho          : "
+        << analysis.finalDensityDifference
+        << "\n";
+
+    std::cout
+        << "Valor final KS            : "
+        << analysis.finalKSResidual
+        << "\n";
+
+    std::cout
+        << "Mix final                 : "
+        << std::fixed
+        << std::setprecision(6)
+        << analysis.finalMixing
+        << "\n";
+
+    std::cout
+        << "========================================================================================================================\n";
 }
 
 }
@@ -630,6 +744,8 @@ MolecularResult solveMolecularSelfConsistentField(
 
     MolecularSCFTiming timing;
 
+    MolecularSCFConvergenceAnalysis convergenceAnalysis;
+
     const auto scfStart =
         std::chrono::steady_clock::now();
 
@@ -645,11 +761,6 @@ MolecularResult solveMolecularSelfConsistentField(
     std::vector<double> alphaDensity;
     std::vector<double> betaDensity;
 
-    /*
-     * Estos orbitales son la solucion del problema orbital
-     * inicial y posteriormente se reutilizan como guess
-     * entre iteraciones SCF.
-     */
     std::vector<MolecularOrbital> previousAlphaOrbitals;
     std::vector<MolecularOrbital> previousBetaOrbitals;
 
@@ -721,6 +832,9 @@ MolecularResult solveMolecularSelfConsistentField(
             std::chrono::steady_clock::now();
 
         MolecularSCFIterationTiming iterationTiming;
+
+        const double iterationMixing =
+            mixing;
 
         auto start =
             std::chrono::steady_clock::now();
@@ -861,12 +975,6 @@ MolecularResult solveMolecularSelfConsistentField(
         start =
             std::chrono::steady_clock::now();
 
-        /*
-         * Reutiliza los orbitales de la iteracion SCF anterior.
-         *
-         * En la primera iteracion, previousAlphaOrbitals contiene
-         * los orbitales calculados durante la inicializacion.
-         */
         const std::vector<MolecularOrbital> alphaOrbitals =
             solveMolecularOrbitalsSilently(
                 grid,
@@ -890,10 +998,6 @@ MolecularResult solveMolecularSelfConsistentField(
 
         if (closedShell) {
 
-            /*
-             * En capa cerrada Alpha y Beta son identicos en
-             * magnitud y solo cambia el canal de spin.
-             */
             betaOrbitals =
                 convertOrbitalsToSpin(
                     alphaOrbitals,
@@ -1136,18 +1240,68 @@ MolecularResult solveMolecularSelfConsistentField(
         result.iterations =
             iteration;
 
-        const bool converged =
-            effectiveDensityDifference <
-                DFTConstants::DENSITY_TOL &&
+        const bool energyConverged =
             energyDifference <
-                DFTConstants::ENERGY_TOL &&
-            residual <
-                DFTConstants::KS_RESIDUAL_TOL;
+            DFTConstants::ENERGY_TOL;
 
-        /*
-         * Los orbitales calculados pasan a ser el guess de la
-         * siguiente iteracion SCF.
-         */
+        const bool densityConverged =
+            effectiveDensityDifference <
+            DFTConstants::DENSITY_TOL;
+
+        const bool ksConverged =
+            residual <
+            DFTConstants::KS_RESIDUAL_TOL;
+
+        if (energyConverged) {
+            convergenceAnalysis.lastEnergyCriterionIteration =
+                iteration;
+        }
+
+        if (densityConverged) {
+            convergenceAnalysis.lastDensityCriterionIteration =
+                iteration;
+        }
+
+        if (ksConverged) {
+            convergenceAnalysis.lastKSCriterionIteration =
+                iteration;
+        }
+
+        convergenceAnalysis.finalEnergyDifference =
+            energyDifference;
+
+        convergenceAnalysis.finalDensityDifference =
+            effectiveDensityDifference;
+
+        convergenceAnalysis.finalKSResidual =
+            residual;
+
+        convergenceAnalysis.finalMixing =
+            iterationMixing;
+
+        convergenceAnalysis.minimumEnergyDifference =
+            std::min(
+                convergenceAnalysis.minimumEnergyDifference,
+                energyDifference
+            );
+
+        convergenceAnalysis.minimumDensityDifference =
+            std::min(
+                convergenceAnalysis.minimumDensityDifference,
+                effectiveDensityDifference
+            );
+
+        convergenceAnalysis.minimumKSResidual =
+            std::min(
+                convergenceAnalysis.minimumKSResidual,
+                residual
+            );
+
+        const bool converged =
+            energyConverged &&
+            densityConverged &&
+            ksConverged;
+
         if (!converged) {
 
             previousAlphaOrbitals =
@@ -1182,7 +1336,7 @@ MolecularResult solveMolecularSelfConsistentField(
                 energyDifference,
                 effectiveDensityDifference,
                 residual,
-                mixing,
+                iterationMixing,
                 iterationTiming.total,
                 alphaOrbitals,
                 betaOrbitals,
@@ -1196,6 +1350,21 @@ MolecularResult solveMolecularSelfConsistentField(
         start =
             std::chrono::steady_clock::now();
 
+        /*
+         * Adaptive density mixing.
+         *
+         * The current iteration is always mixed using iterationMixing.
+         * Only after the iteration has been evaluated do we determine
+         * the mixing value for the next SCF iteration.
+         *
+         * A significant increase in the density difference is treated
+         * as an oscillation. Instead of cutting the mixing in half,
+         * the reduction is softer so that the SCF does not repeatedly
+         * enter the same low-mixing/high-mixing cycle.
+         *
+         * When the density difference decreases, the mixing is increased
+         * gradually toward MAX_MIXING.
+         */
         if (std::isfinite(previousDensityDifference)) {
 
             if (effectiveDensityDifference >
@@ -1224,13 +1393,13 @@ MolecularResult solveMolecularSelfConsistentField(
         mixDensity(
             alphaDensity,
             outputAlphaDensity,
-            mixing
+            iterationMixing
         );
 
         mixDensity(
             betaDensity,
             outputBetaDensity,
-            mixing
+            iterationMixing
         );
 
         end =
@@ -1266,7 +1435,7 @@ MolecularResult solveMolecularSelfConsistentField(
             energyDifference,
             effectiveDensityDifference,
             residual,
-            mixing,
+            iterationMixing,
             iterationTiming.total,
             alphaOrbitals,
             betaOrbitals,
@@ -1406,6 +1575,10 @@ MolecularResult solveMolecularSelfConsistentField(
     printTimeLine(
         "Tiempo no clasificado",
         unaccountedTime
+    );
+
+    printConvergenceAnalysis(
+        convergenceAnalysis
     );
 
     std::cout
