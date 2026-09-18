@@ -1,21 +1,17 @@
 #include "SelfConsistentFieldMolecule.h"
 
 #include "DFTConstants.h"
-#include "EigenvalueSolverMolecule.h"
 #include "ElectronDensityMolecule.h"
 #include "ExchangeCorrelationMolecule.h"
 #include "HartreePotentialMolecule.h"
 #include "NuclearPotential.h"
+#include "SelfConsistentFieldMoleculeHelper.h"
 #include "SelfConsistentFieldMoleculeMath.h"
 #include "TotalEnergyMolecule.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
-#include <iomanip>
-#include <iostream>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -28,250 +24,6 @@ constexpr double MIXING_INCREASE = 1.10;
 constexpr double MIXING_DECREASE = 0.75;
 
 constexpr double OSCILLATION_FACTOR = 1.05;
-
-struct MolecularSCFTiming
-{
-    double initialization = 0.0;
-
-    double density = 0.0;
-    double hartree = 0.0;
-
-    double exchangeCorrelationAlpha = 0.0;
-    double exchangeCorrelationBeta = 0.0;
-
-    double potentialConstruction = 0.0;
-
-    double orbitalAlpha = 0.0;
-    double orbitalBeta = 0.0;
-
-    double outputDensity = 0.0;
-    double outputHartree = 0.0;
-
-    double totalEnergy = 0.0;
-
-    double densityDifference = 0.0;
-    double ksResidual = 0.0;
-    double mixing = 0.0;
-
-    double totalIterations = 0.0;
-};
-
-struct MolecularSCFIterationTiming
-{
-    double density = 0.0;
-    double hartree = 0.0;
-
-    double exchangeCorrelationAlpha = 0.0;
-    double exchangeCorrelationBeta = 0.0;
-
-    double potentialConstruction = 0.0;
-
-    double orbitalAlpha = 0.0;
-    double orbitalBeta = 0.0;
-
-    double outputDensity = 0.0;
-    double outputHartree = 0.0;
-
-    double totalEnergy = 0.0;
-
-    double densityDifference = 0.0;
-    double ksResidual = 0.0;
-    double mixing = 0.0;
-
-    double total = 0.0;
-};
-
-struct MolecularSCFConvergenceAnalysis
-{
-    int lastEnergyCriterionIteration = 0;
-    int lastDensityCriterionIteration = 0;
-    int lastKSCriterionIteration = 0;
-
-    double finalEnergyDifference =
-        std::numeric_limits<double>::infinity();
-
-    double finalDensityDifference =
-        std::numeric_limits<double>::infinity();
-
-    double finalKSResidual =
-        std::numeric_limits<double>::infinity();
-
-    double finalMixing = 0.0;
-
-    double minimumEnergyDifference =
-        std::numeric_limits<double>::infinity();
-
-    double minimumDensityDifference =
-        std::numeric_limits<double>::infinity();
-
-    double minimumKSResidual =
-        std::numeric_limits<double>::infinity();
-};
-
-double elapsedSeconds(
-    const std::chrono::steady_clock::time_point& start,
-    const std::chrono::steady_clock::time_point& end
-)
-{
-    return std::chrono::duration<double>(
-        end - start
-    ).count();
-}
-
-std::vector<MolecularOrbital> solveMolecularOrbitalsSilently(
-    const CartesianGrid& grid,
-    const std::vector<double>& potential,
-    std::size_t orbitalCount,
-    const std::vector<int>& occupations,
-    SpinChannel spin,
-    const std::vector<MolecularOrbital>& initialOrbitals
-)
-{
-    std::ostringstream suppressedOutput;
-
-    std::streambuf* originalBuffer =
-        std::cout.rdbuf(
-            suppressedOutput.rdbuf()
-        );
-
-    try {
-
-        const std::vector<MolecularOrbital> orbitals =
-            solveMolecularOrbitals(
-                grid,
-                potential,
-                orbitalCount,
-                occupations,
-                spin,
-                initialOrbitals
-            );
-
-        std::cout.rdbuf(originalBuffer);
-
-        return orbitals;
-    }
-    catch (...) {
-
-        std::cout.rdbuf(originalBuffer);
-
-        throw;
-    }
-}
-
-void printSCFHeader()
-{
-    std::cout
-        << "\n"
-        << "========================================================================================================================\n"
-        << "SCF MOLECULAR\n"
-        << "========================================================================================================================\n"
-        << "Iter | E (Ha)         | dE         | dRho      | KS        | Mix   | E Alpha      | E Beta       | tA(ms) | tB(ms) | tSCF(s)\n"
-        << "-----|----------------|------------|-----------|-----------|-------|--------------|--------------|--------|--------|---------\n";
-}
-
-void printSCFIteration(
-    int iteration,
-    double energy,
-    double energyDifference,
-    double densityDifference,
-    double residual,
-    double mixing,
-    double iterationTime,
-    const std::vector<MolecularOrbital>& alphaOrbitals,
-    const std::vector<MolecularOrbital>& betaOrbitals,
-    double alphaTime,
-    double betaTime
-)
-{
-    std::cout
-        << std::right
-        << std::setw(4)
-        << iteration
-        << " | ";
-
-    std::cout
-        << std::scientific
-        << std::setprecision(10)
-        << std::setw(14)
-        << energy
-        << " | ";
-
-    if (std::isfinite(energyDifference)) {
-        std::cout
-            << std::scientific
-            << std::setprecision(4)
-            << std::setw(10)
-            << energyDifference;
-    }
-    else {
-        std::cout
-            << std::setw(10)
-            << "inf";
-    }
-
-    std::cout
-        << " | "
-        << std::scientific
-        << std::setprecision(4)
-        << std::setw(9)
-        << densityDifference
-        << " | "
-        << std::scientific
-        << std::setprecision(4)
-        << std::setw(9)
-        << residual
-        << " | "
-        << std::fixed
-        << std::setprecision(3)
-        << std::setw(5)
-        << mixing
-        << " | ";
-
-    if (!alphaOrbitals.empty()) {
-        std::cout
-            << std::scientific
-            << std::setprecision(6)
-            << std::setw(12)
-            << alphaOrbitals.front().eigenvalue;
-    }
-    else {
-        std::cout
-            << std::setw(12)
-            << "N/A";
-    }
-
-    std::cout
-        << " | ";
-
-    if (!betaOrbitals.empty()) {
-        std::cout
-            << std::scientific
-            << std::setprecision(6)
-            << std::setw(12)
-            << betaOrbitals.front().eigenvalue;
-    }
-    else {
-        std::cout
-            << std::setw(12)
-            << "N/A";
-    }
-
-    std::cout
-        << " | "
-        << std::fixed
-        << std::setprecision(3)
-        << std::setw(6)
-        << alphaTime * 1000.0
-        << " | "
-        << std::setw(6)
-        << betaTime * 1000.0
-        << " | "
-        << std::fixed
-        << std::setprecision(6)
-        << std::setw(8)
-        << iterationTime
-        << "\n";
-}
 
 void buildInitialMolecularDensities(
     const CartesianGrid& grid,
@@ -301,7 +53,7 @@ void buildInitialMolecularDensities(
         );
 
     initialAlphaOrbitals =
-        solveMolecularOrbitalsSilently(
+        MolecularSCFHelper::solveMolecularOrbitalsSilently(
             grid,
             nuclearPotential,
             alphaOccupations.size(),
@@ -321,7 +73,7 @@ void buildInitialMolecularDensities(
     else {
 
         initialBetaOrbitals =
-            solveMolecularOrbitalsSilently(
+            MolecularSCFHelper::solveMolecularOrbitalsSilently(
                 grid,
                 nuclearPotential,
                 betaOccupations.size(),
@@ -344,117 +96,6 @@ void buildInitialMolecularDensities(
         );
 }
 
-void printTimeLine(
-    const char* label,
-    double seconds
-)
-{
-    std::cout
-        << std::left
-        << std::setw(30)
-        << label
-        << std::right
-        << std::fixed
-        << std::setprecision(3)
-        << std::setw(12)
-        << seconds * 1000.0
-        << " ms\n";
-}
-
-void printConvergenceAnalysis(
-    const MolecularSCFConvergenceAnalysis& analysis
-)
-{
-    std::cout
-        << "\n"
-        << "========================================================================================================================\n"
-        << "SCF CONVERGENCE ANALYSIS\n"
-        << "========================================================================================================================\n";
-
-    std::cout
-        << std::scientific
-        << std::setprecision(6);
-
-    std::cout
-        << "DENSITY_TOL       : "
-        << DFTConstants::DENSITY_TOL
-        << "\n";
-
-    std::cout
-        << "ENERGY_TOL        : "
-        << DFTConstants::ENERGY_TOL
-        << "\n";
-
-    std::cout
-        << "KS_RESIDUAL_TOL   : "
-        << DFTConstants::KS_RESIDUAL_TOL
-        << "\n";
-
-    std::cout
-        << "------------------------------------------------------------------------------------------------------------------------\n";
-
-    std::cout
-        << "Ultima iteracion con dE   < ENERGY_TOL      : "
-        << analysis.lastEnergyCriterionIteration
-        << "\n";
-
-    std::cout
-        << "Ultima iteracion con dRho < DENSITY_TOL     : "
-        << analysis.lastDensityCriterionIteration
-        << "\n";
-
-    std::cout
-        << "Ultima iteracion con KS   < KS_RESIDUAL_TOL : "
-        << analysis.lastKSCriterionIteration
-        << "\n";
-
-    std::cout
-        << "------------------------------------------------------------------------------------------------------------------------\n";
-
-    std::cout
-        << "Minimo dE   observado     : "
-        << analysis.minimumEnergyDifference
-        << "\n";
-
-    std::cout
-        << "Minimo dRho observado     : "
-        << analysis.minimumDensityDifference
-        << "\n";
-
-    std::cout
-        << "Minimo KS observado       : "
-        << analysis.minimumKSResidual
-        << "\n";
-
-    std::cout
-        << "------------------------------------------------------------------------------------------------------------------------\n";
-
-    std::cout
-        << "Valor final dE            : "
-        << analysis.finalEnergyDifference
-        << "\n";
-
-    std::cout
-        << "Valor final dRho          : "
-        << analysis.finalDensityDifference
-        << "\n";
-
-    std::cout
-        << "Valor final KS            : "
-        << analysis.finalKSResidual
-        << "\n";
-
-    std::cout
-        << "Mix final                 : "
-        << std::fixed
-        << std::setprecision(6)
-        << analysis.finalMixing
-        << "\n";
-
-    std::cout
-        << "========================================================================================================================\n";
-}
-
 }
 
 MolecularResult solveMolecularSelfConsistentField(
@@ -464,6 +105,12 @@ MolecularResult solveMolecularSelfConsistentField(
     const XCFunctional& functional
 )
 {
+    /*
+     * ================================================================
+     * 1. VALIDACION DEL SISTEMA
+     * ================================================================
+     */
+
     if (grid.getNx() < 2 ||
         grid.getNy() < 2 ||
         grid.getNz() < 2) {
@@ -474,19 +121,28 @@ MolecularResult solveMolecularSelfConsistentField(
     }
 
     if (molecule.getNucleusCount() == 0) {
+
         throw std::invalid_argument(
             "La molecula debe contener al menos un nucleo."
         );
     }
 
+    /*
+     * ================================================================
+     * 2. CARGA NUCLEAR Y NUMERO DE ELECTRONES
+     * ================================================================
+     */
+
     const int nuclearCharge =
         [&molecule]() {
+
             int total = 0;
 
             for (const Molecule::Nucleus& nucleus :
                  molecule.getNuclei()) {
 
-                total += nucleus.atomicNumber;
+                total +=
+                    nucleus.atomicNumber;
             }
 
             return total;
@@ -497,16 +153,24 @@ MolecularResult solveMolecularSelfConsistentField(
         charge;
 
     if (electronCount < 0) {
+
         throw std::invalid_argument(
             "La carga molecular produce un numero negativo de electrones."
         );
     }
 
     if (electronCount == 0) {
+
         throw std::invalid_argument(
             "El SCF molecular requiere al menos un electron."
         );
     }
+
+    /*
+     * ================================================================
+     * 3. PARTICION DE ESPIN
+     * ================================================================
+     */
 
     const int alphaElectrons =
         (electronCount + 1) / 2;
@@ -517,15 +181,21 @@ MolecularResult solveMolecularSelfConsistentField(
     const bool closedShell =
         alphaElectrons == betaElectrons;
 
-    MolecularSCFTiming timing;
+    /*
+     * ================================================================
+     * 4. ESTADO INICIAL
+     * ================================================================
+     */
 
-    MolecularSCFConvergenceAnalysis convergenceAnalysis;
+    MolecularSCFHelper::Timer timer;
 
-    const auto scfStart =
-        std::chrono::steady_clock::now();
+    MolecularSCFHelper::ConvergenceAnalysis convergenceAnalysis;
 
-    const auto initializationStart =
-        std::chrono::steady_clock::now();
+    timer.start();
+
+    timer.begin(
+        MolecularSCFHelper::TimingStage::Initialization
+    );
 
     const std::vector<double> nuclearPotential =
         NuclearPotential::calculate(
@@ -534,9 +204,11 @@ MolecularResult solveMolecularSelfConsistentField(
         );
 
     std::vector<double> alphaDensity;
+
     std::vector<double> betaDensity;
 
     std::vector<MolecularOrbital> previousAlphaOrbitals;
+
     std::vector<MolecularOrbital> previousBetaOrbitals;
 
     buildInitialMolecularDensities(
@@ -550,14 +222,9 @@ MolecularResult solveMolecularSelfConsistentField(
         previousBetaOrbitals
     );
 
-    const auto initializationEnd =
-        std::chrono::steady_clock::now();
-
-    timing.initialization =
-        elapsedSeconds(
-            initializationStart,
-            initializationEnd
-        );
+    timer.end(
+        MolecularSCFHelper::TimingStage::Initialization
+    );
 
     if (alphaDensity.size() != grid.getSize() ||
         betaDensity.size() != grid.getSize()) {
@@ -566,6 +233,12 @@ MolecularResult solveMolecularSelfConsistentField(
             "Las densidades moleculares iniciales tienen un tamano incorrecto."
         );
     }
+
+    /*
+     * ================================================================
+     * 5. OCUPACIONES
+     * ================================================================
+     */
 
     const std::vector<int> alphaOccupations =
         MolecularSCFMath::buildSpinOccupations(
@@ -576,6 +249,12 @@ MolecularResult solveMolecularSelfConsistentField(
         MolecularSCFMath::buildSpinOccupations(
             betaElectrons
         );
+
+    /*
+     * ================================================================
+     * 6. ESTADO SCF
+     * ================================================================
+     */
 
     double previousEnergy =
         std::numeric_limits<double>::infinity();
@@ -597,22 +276,34 @@ MolecularResult solveMolecularSelfConsistentField(
     SCFResult& result =
         molecularResult.scf;
 
-    printSCFHeader();
+    MolecularSCFHelper::printSCFHeader();
+
+    /*
+     * ================================================================
+     * 7. CICLO SCF
+     * ================================================================
+     */
 
     for (int iteration = 1;
          iteration <= DFTConstants::MAX_SCF_ITERATIONS;
          ++iteration) {
 
-        const auto iterationStart =
-            std::chrono::steady_clock::now();
-
-        MolecularSCFIterationTiming iterationTiming;
-
         const double iterationMixing =
             mixing;
 
-        auto start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::TotalIterations
+        );
+
+        /*
+         * ------------------------------------------------------------
+         * 7.1 DENSIDAD ELECTRONICA TOTAL
+         * ------------------------------------------------------------
+         */
+
+        timer.begin(
+            MolecularSCFHelper::TimingStage::Density
+        );
 
         std::vector<double> density(
             grid.getSize(),
@@ -628,17 +319,19 @@ MolecularResult solveMolecularSelfConsistentField(
                 betaDensity[i];
         }
 
-        auto end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::Density
+        );
 
-        iterationTiming.density =
-            elapsedSeconds(start, end);
+        /*
+         * ------------------------------------------------------------
+         * 7.2 POTENCIAL DE HARTREE
+         * ------------------------------------------------------------
+         */
 
-        timing.density +=
-            iterationTiming.density;
-
-        start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::Hartree
+        );
 
         const std::vector<double> hartreePotential =
             calculateHartreePotential(
@@ -646,17 +339,19 @@ MolecularResult solveMolecularSelfConsistentField(
                 density
             );
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::Hartree
+        );
 
-        iterationTiming.hartree =
-            elapsedSeconds(start, end);
+        /*
+         * ------------------------------------------------------------
+         * 7.3 POTENCIAL DE INTERCAMBIO-CORRELACION ALPHA
+         * ------------------------------------------------------------
+         */
 
-        timing.hartree +=
-            iterationTiming.hartree;
-
-        start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::ExchangeCorrelationAlpha
+        );
 
         const std::vector<double> alphaXCPotential =
             calculateMolecularSpinExchangeCorrelationPotential(
@@ -667,14 +362,15 @@ MolecularResult solveMolecularSelfConsistentField(
                 0
             );
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::ExchangeCorrelationAlpha
+        );
 
-        iterationTiming.exchangeCorrelationAlpha =
-            elapsedSeconds(start, end);
-
-        timing.exchangeCorrelationAlpha +=
-            iterationTiming.exchangeCorrelationAlpha;
+        /*
+         * ------------------------------------------------------------
+         * 7.4 POTENCIAL DE INTERCAMBIO-CORRELACION BETA
+         * ------------------------------------------------------------
+         */
 
         std::vector<double> betaXCPotential;
 
@@ -682,14 +378,12 @@ MolecularResult solveMolecularSelfConsistentField(
 
             betaXCPotential =
                 alphaXCPotential;
-
-            iterationTiming.exchangeCorrelationBeta =
-                0.0;
         }
         else {
 
-            start =
-                std::chrono::steady_clock::now();
+            timer.begin(
+                MolecularSCFHelper::TimingStage::ExchangeCorrelationBeta
+            );
 
             betaXCPotential =
                 calculateMolecularSpinExchangeCorrelationPotential(
@@ -700,18 +394,22 @@ MolecularResult solveMolecularSelfConsistentField(
                     1
                 );
 
-            end =
-                std::chrono::steady_clock::now();
-
-            iterationTiming.exchangeCorrelationBeta =
-                elapsedSeconds(start, end);
+            timer.end(
+                MolecularSCFHelper::TimingStage::ExchangeCorrelationBeta
+            );
         }
 
-        timing.exchangeCorrelationBeta +=
-            iterationTiming.exchangeCorrelationBeta;
+        /*
+         * ------------------------------------------------------------
+         * 7.5 POTENCIALES EFECTIVOS DE KOHN-SHAM
+         *
+         * V_KS = V_nuclear + V_Hartree + V_XC
+         * ------------------------------------------------------------
+         */
 
-        start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::PotentialConstruction
+        );
 
         std::vector<double> alphaPotential(
             grid.getSize(),
@@ -738,20 +436,22 @@ MolecularResult solveMolecularSelfConsistentField(
                 betaXCPotential[i];
         }
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::PotentialConstruction
+        );
 
-        iterationTiming.potentialConstruction =
-            elapsedSeconds(start, end);
+        /*
+         * ------------------------------------------------------------
+         * 7.6 RESOLUCION DE KOHN-SHAM ALPHA
+         * ------------------------------------------------------------
+         */
 
-        timing.potentialConstruction +=
-            iterationTiming.potentialConstruction;
-
-        start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::OrbitalAlpha
+        );
 
         const std::vector<MolecularOrbital> alphaOrbitals =
-            solveMolecularOrbitalsSilently(
+            MolecularSCFHelper::solveMolecularOrbitalsSilently(
                 grid,
                 alphaPotential,
                 alphaOccupations.size(),
@@ -760,14 +460,15 @@ MolecularResult solveMolecularSelfConsistentField(
                 previousAlphaOrbitals
             );
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::OrbitalAlpha
+        );
 
-        iterationTiming.orbitalAlpha =
-            elapsedSeconds(start, end);
-
-        timing.orbitalAlpha +=
-            iterationTiming.orbitalAlpha;
+        /*
+         * ------------------------------------------------------------
+         * 7.7 RESOLUCION DE KOHN-SHAM BETA
+         * ------------------------------------------------------------
+         */
 
         std::vector<MolecularOrbital> betaOrbitals;
 
@@ -778,17 +479,15 @@ MolecularResult solveMolecularSelfConsistentField(
                     alphaOrbitals,
                     SpinChannel::Beta
                 );
-
-            iterationTiming.orbitalBeta =
-                0.0;
         }
         else {
 
-            start =
-                std::chrono::steady_clock::now();
+            timer.begin(
+                MolecularSCFHelper::TimingStage::OrbitalBeta
+            );
 
             betaOrbitals =
-                solveMolecularOrbitalsSilently(
+                MolecularSCFHelper::solveMolecularOrbitalsSilently(
                     grid,
                     betaPotential,
                     betaOccupations.size(),
@@ -797,15 +496,16 @@ MolecularResult solveMolecularSelfConsistentField(
                     previousBetaOrbitals
                 );
 
-            end =
-                std::chrono::steady_clock::now();
-
-            iterationTiming.orbitalBeta =
-                elapsedSeconds(start, end);
+            timer.end(
+                MolecularSCFHelper::TimingStage::OrbitalBeta
+            );
         }
 
-        timing.orbitalBeta +=
-            iterationTiming.orbitalBeta;
+        /*
+         * ------------------------------------------------------------
+         * 7.8 COMBINACION DE ORBITALES
+         * ------------------------------------------------------------
+         */
 
         std::vector<MolecularOrbital> orbitals;
 
@@ -826,8 +526,15 @@ MolecularResult solveMolecularSelfConsistentField(
             betaOrbitals.end()
         );
 
-        start =
-            std::chrono::steady_clock::now();
+        /*
+         * ------------------------------------------------------------
+         * 7.9 NUEVA DENSIDAD ELECTRONICA
+         * ------------------------------------------------------------
+         */
+
+        timer.begin(
+            MolecularSCFHelper::TimingStage::OutputDensity
+        );
 
         const std::vector<double> outputAlphaDensity =
             calculateMolecularSpinDensity(
@@ -864,17 +571,22 @@ MolecularResult solveMolecularSelfConsistentField(
                 outputBetaDensity[i];
         }
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::OutputDensity
+        );
 
-        iterationTiming.outputDensity =
-            elapsedSeconds(start, end);
+        /*
+         * ------------------------------------------------------------
+         * 7.10 NUEVO POTENCIAL DE HARTREE
+         *
+         * Se utiliza para evaluar la energia total con la densidad
+         * obtenida de los orbitales actuales.
+         * ------------------------------------------------------------
+         */
 
-        timing.outputDensity +=
-            iterationTiming.outputDensity;
-
-        start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::OutputHartree
+        );
 
         const std::vector<double> outputHartreePotential =
             calculateHartreePotential(
@@ -882,17 +594,19 @@ MolecularResult solveMolecularSelfConsistentField(
                 outputDensity
             );
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::OutputHartree
+        );
 
-        iterationTiming.outputHartree =
-            elapsedSeconds(start, end);
+        /*
+         * ------------------------------------------------------------
+         * 7.11 ENERGIA TOTAL
+         * ------------------------------------------------------------
+         */
 
-        timing.outputHartree +=
-            iterationTiming.outputHartree;
-
-        start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::TotalEnergy
+        );
 
         const EnergyComponents energy =
             calculateMolecularTotalEnergy(
@@ -906,17 +620,19 @@ MolecularResult solveMolecularSelfConsistentField(
                 nuclearPotential
             );
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::TotalEnergy
+        );
 
-        iterationTiming.totalEnergy =
-            elapsedSeconds(start, end);
+        /*
+         * ------------------------------------------------------------
+         * 7.12 CRITERIOS DE CONVERGENCIA EN DENSIDAD Y ENERGIA
+         * ------------------------------------------------------------
+         */
 
-        timing.totalEnergy +=
-            iterationTiming.totalEnergy;
-
-        start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::DensityDifference
+        );
 
         const double densityDifference =
             MolecularSCFMath::calculateMolecularDensityDifference(
@@ -948,17 +664,19 @@ MolecularResult solveMolecularSelfConsistentField(
                 )
                 : std::numeric_limits<double>::infinity();
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::DensityDifference
+        );
 
-        iterationTiming.densityDifference =
-            elapsedSeconds(start, end);
+        /*
+         * ------------------------------------------------------------
+         * 7.13 RESIDUO DE KOHN-SHAM
+         * ------------------------------------------------------------
+         */
 
-        timing.densityDifference +=
-            iterationTiming.densityDifference;
-
-        start =
-            std::chrono::steady_clock::now();
+        timer.begin(
+            MolecularSCFHelper::TimingStage::KSResidual
+        );
 
         const double residual =
             MolecularSCFMath::calculateMaximumMolecularKSResidual(
@@ -968,14 +686,15 @@ MolecularResult solveMolecularSelfConsistentField(
                 orbitals
             );
 
-        end =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::KSResidual
+        );
 
-        iterationTiming.ksResidual =
-            elapsedSeconds(start, end);
-
-        timing.ksResidual +=
-            iterationTiming.ksResidual;
+        /*
+         * ------------------------------------------------------------
+         * 7.14 ACTUALIZACION DEL RESULTADO FISICO
+         * ------------------------------------------------------------
+         */
 
         result.orbitals.clear();
 
@@ -1015,6 +734,12 @@ MolecularResult solveMolecularSelfConsistentField(
         result.iterations =
             iteration;
 
+        /*
+         * ------------------------------------------------------------
+         * 7.15 EVALUACION DE CONVERGENCIA
+         * ------------------------------------------------------------
+         */
+
         const bool energyConverged =
             energyDifference <
             DFTConstants::ENERGY_TOL;
@@ -1027,17 +752,25 @@ MolecularResult solveMolecularSelfConsistentField(
             residual <
             DFTConstants::KS_RESIDUAL_TOL;
 
+        /*
+         * Datos para reporte.
+         * No intervienen en las ecuaciones del SCF.
+         */
+
         if (energyConverged) {
+
             convergenceAnalysis.lastEnergyCriterionIteration =
                 iteration;
         }
 
         if (densityConverged) {
+
             convergenceAnalysis.lastDensityCriterionIteration =
                 iteration;
         }
 
         if (ksConverged) {
+
             convergenceAnalysis.lastKSCriterionIteration =
                 iteration;
         }
@@ -1077,69 +810,72 @@ MolecularResult solveMolecularSelfConsistentField(
             densityConverged &&
             ksConverged;
 
-        if (!converged) {
-
-            previousAlphaOrbitals =
-                alphaOrbitals;
-
-            if (!closedShell) {
-
-                previousBetaOrbitals =
-                    betaOrbitals;
-            }
-        }
+        /*
+         * ------------------------------------------------------------
+         * 7.16 CONVERGENCIA
+         * ------------------------------------------------------------
+         */
 
         if (converged) {
 
-            result.converged = true;
+            result.converged =
+                true;
 
-            const auto iterationEnd =
-                std::chrono::steady_clock::now();
+            timer.end(
+                MolecularSCFHelper::TimingStage::TotalIterations
+            );
 
-            iterationTiming.total =
-                elapsedSeconds(
-                    iterationStart,
-                    iterationEnd
-                );
-
-            timing.totalIterations +=
-                iterationTiming.total;
-
-            printSCFIteration(
+            MolecularSCFHelper::printSCFIteration(
                 iteration,
                 energy.total,
                 energyDifference,
                 effectiveDensityDifference,
                 residual,
                 iterationMixing,
-                iterationTiming.total,
+                timer.get(
+                    MolecularSCFHelper::TimingStage::TotalIterations
+                ),
                 alphaOrbitals,
                 betaOrbitals,
-                iterationTiming.orbitalAlpha,
-                iterationTiming.orbitalBeta
+                timer.get(
+                    MolecularSCFHelper::TimingStage::OrbitalAlpha
+                ),
+                timer.get(
+                    MolecularSCFHelper::TimingStage::OrbitalBeta
+                )
             );
 
             break;
         }
 
-        start =
-            std::chrono::steady_clock::now();
+        /*
+         * ------------------------------------------------------------
+         * 7.17 ESTADOS ANTERIORES PARA LA SIGUIENTE ITERACION
+         * ------------------------------------------------------------
+         */
+
+        previousAlphaOrbitals =
+            alphaOrbitals;
+
+        if (!closedShell) {
+
+            previousBetaOrbitals =
+                betaOrbitals;
+        }
 
         /*
-         * Adaptive density mixing.
+         * ------------------------------------------------------------
+         * 7.18 ADAPTACION DEL MIXING
          *
-         * The current iteration is always mixed using iterationMixing.
-         * Only after the iteration has been evaluated do we determine
-         * the mixing value for the next SCF iteration.
-         *
-         * A significant increase in the density difference is treated
-         * as an oscillation. Instead of cutting the mixing in half,
-         * the reduction is softer so that the SCF does not repeatedly
-         * enter the same low-mixing/high-mixing cycle.
-         *
-         * When the density difference decreases, the mixing is increased
-         * gradually toward MAX_MIXING.
+         * El valor utilizado en la iteracion actual es iterationMixing.
+         * El nuevo valor se calcula para la siguiente iteracion.
+         * ------------------------------------------------------------
          */
+
+        timer.begin(
+            MolecularSCFHelper::TimingStage::Mixing
+        );
+
         if (std::isfinite(previousDensityDifference)) {
 
             if (effectiveDensityDifference >
@@ -1177,14 +913,9 @@ MolecularResult solveMolecularSelfConsistentField(
             iterationMixing
         );
 
-        end =
-            std::chrono::steady_clock::now();
-
-        iterationTiming.mixing =
-            elapsedSeconds(start, end);
-
-        timing.mixing +=
-            iterationTiming.mixing;
+        timer.end(
+            MolecularSCFHelper::TimingStage::Mixing
+        );
 
         previousDensityDifference =
             effectiveDensityDifference;
@@ -1192,172 +923,54 @@ MolecularResult solveMolecularSelfConsistentField(
         previousEnergy =
             energy.total;
 
-        const auto iterationEnd =
-            std::chrono::steady_clock::now();
+        timer.end(
+            MolecularSCFHelper::TimingStage::TotalIterations
+        );
 
-        iterationTiming.total =
-            elapsedSeconds(
-                iterationStart,
-                iterationEnd
-            );
-
-        timing.totalIterations +=
-            iterationTiming.total;
-
-        printSCFIteration(
+        MolecularSCFHelper::printSCFIteration(
             iteration,
             energy.total,
             energyDifference,
             effectiveDensityDifference,
             residual,
             iterationMixing,
-            iterationTiming.total,
+            timer.get(
+                MolecularSCFHelper::TimingStage::TotalIterations
+            ),
             alphaOrbitals,
             betaOrbitals,
-            iterationTiming.orbitalAlpha,
-            iterationTiming.orbitalBeta
+            timer.get(
+                MolecularSCFHelper::TimingStage::OrbitalAlpha
+            ),
+            timer.get(
+                MolecularSCFHelper::TimingStage::OrbitalBeta
+            )
         );
     }
 
-    const auto scfEnd =
-        std::chrono::steady_clock::now();
+    /*
+     * ================================================================
+     * 8. FINALIZACION
+     * ================================================================
+     */
 
-    const double scfTotalTime =
-        elapsedSeconds(
-            scfStart,
-            scfEnd
-        );
+    timer.stop();
 
-    const double measuredTime =
-        timing.initialization +
-        timing.totalIterations;
-
-    std::cout
-        << "\n"
-        << "============================================================\n"
-        << "SCF MOLECULAR\n"
-        << "============================================================\n"
-        << "Iteraciones       : "
-        << result.iterations
-        << "\n"
-        << "Convergencia      : "
-        << (result.converged ? "SI" : "NO")
-        << "\n"
-        << "Energia final     : "
-        << std::scientific
-        << std::setprecision(12)
-        << result.energy.total
-        << " Ha\n"
-        << "Tiempo SCF        : "
-        << std::fixed
-        << std::setprecision(6)
-        << scfTotalTime
-        << " s\n"
-        << "============================================================\n"
-        << "PROFILING\n"
-        << "============================================================\n";
-
-    printTimeLine(
-        "Inicializacion",
-        timing.initialization
+    MolecularSCFHelper::printSCFSummary(
+        result.iterations,
+        result.converged,
+        result.energy.total
     );
 
-    printTimeLine(
-        "Densidad",
-        timing.density
+    MolecularSCFHelper::printProfiling(
+        timer
     );
 
-    printTimeLine(
-        "Hartree",
-        timing.hartree
-    );
-
-    printTimeLine(
-        "XC Alpha",
-        timing.exchangeCorrelationAlpha
-    );
-
-    printTimeLine(
-        "XC Beta",
-        timing.exchangeCorrelationBeta
-    );
-
-    printTimeLine(
-        "Construccion potencial",
-        timing.potentialConstruction
-    );
-
-    printTimeLine(
-        "Orbitales Alpha",
-        timing.orbitalAlpha
-    );
-
-    printTimeLine(
-        "Orbitales Beta",
-        timing.orbitalBeta
-    );
-
-    printTimeLine(
-        "Densidad de salida",
-        timing.outputDensity
-    );
-
-    printTimeLine(
-        "Hartree salida",
-        timing.outputHartree
-    );
-
-    printTimeLine(
-        "Energia total",
-        timing.totalEnergy
-    );
-
-    printTimeLine(
-        "Diferencias de densidad",
-        timing.densityDifference
-    );
-
-    printTimeLine(
-        "Residuo Kohn-Sham",
-        timing.ksResidual
-    );
-
-    printTimeLine(
-        "Mixing",
-        timing.mixing
-    );
-
-    std::cout
-        << "------------------------------------------------------------\n";
-
-    printTimeLine(
-        "Tiempo SCF medido",
-        measuredTime
-    );
-
-    printTimeLine(
-        "Tiempo SCF real",
-        scfTotalTime
-    );
-
-    const double unaccountedTime =
-        std::max(
-            0.0,
-            scfTotalTime -
-            measuredTime
-        );
-
-    printTimeLine(
-        "Tiempo no clasificado",
-        unaccountedTime
-    );
-
-    printConvergenceAnalysis(
+    MolecularSCFHelper::printConvergenceAnalysis(
         convergenceAnalysis
     );
 
-    std::cout
-        << "============================================================\n";
+    MolecularSCFHelper::printSCFEndLine();
 
     return molecularResult;
 }
