@@ -29,10 +29,10 @@ int main()
 
         std::cout
             << "============================================================\n"
-            << "PRIMEROS 15 ATOMOS - PZ81\n"
+            << "PRIMEROS 5 ATOMOS - PZ81\n"
             << "============================================================\n";
 
-        for (int Z = 1; Z <= 15; ++Z)
+        for (int Z = 1; Z <= 5; ++Z)
         {
             const AtomicConfiguration configuration =
                 getAtomicConfiguration(Z);
@@ -60,10 +60,10 @@ int main()
         std::cout
             << "\n"
             << "============================================================\n"
-            << "PRIMEROS 15 ATOMOS - PBE96\n"
+            << "PRIMEROS 5 ATOMOS - PBE96\n"
             << "============================================================\n";
 
-        for (int Z = 1; Z <= 15; ++Z)
+        for (int Z = 1; Z <= 5; ++Z)
         {
             const AtomicConfiguration configuration =
                 getAtomicConfiguration(Z);

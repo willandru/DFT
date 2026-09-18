@@ -5,9 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <stdexcept>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -15,196 +13,343 @@ namespace
 {
 
 constexpr double RESIDUAL_TOLERANCE = 1.0e-7;
-constexpr double ORTHOGONALIZATION_TOLERANCE = 1.0e-12;
-constexpr double DENOMINATOR_TOLERANCE = 1.0e-10;
-constexpr double JACOBI_TOLERANCE = 1.0e-13;
+constexpr double LINEAR_DEPENDENCE_TOLERANCE = 1.0e-13;
+constexpr double JACOBI_TOLERANCE = 1.0e-12;
 
-constexpr std::size_t JACOBI_MAX_ITERATIONS = 10000;
+constexpr std::size_t EXTRA_SUBSPACE_VECTORS = 8;
 
-constexpr std::size_t SUBSPACE_MULTIPLIER = 4;
-constexpr std::size_t SUBSPACE_EXTRA = 8;
+struct RitzState
+{
+    double eigenvalue = 0.0;
 
-double dot(
-    const std::vector<double>& a,
-    const std::vector<double>& b
+    std::vector<double> psi;
+    std::vector<double> hPsi;
+    std::vector<double> residual;
+
+    double residualNorm = 0.0;
+};
+
+double getVolumeElement(
+    const CartesianGrid& grid
 )
 {
-    if (a.size() != b.size())
+    const double dx = grid.getDx();
+    const double dy = grid.getDy();
+    const double dz = grid.getDz();
+
+    if (dx <= 0.0 ||
+        dy <= 0.0 ||
+        dz <= 0.0)
     {
         throw std::invalid_argument(
-            "Block-Davidson: dimensiones incompatibles en producto escalar."
+            "Los pasos de la malla cartesiana deben ser mayores que cero."
         );
     }
 
-    double result = 0.0;
-
-    for (std::size_t i = 0; i < a.size(); ++i)
-    {
-        result += a[i] * b[i];
-    }
-
-    return result;
+    return dx * dy * dz;
 }
 
-double norm(
-    const std::vector<double>& vector
+void validateVectorSize(
+    const std::vector<double>& vector,
+    std::size_t expectedSize,
+    const char* message
 )
 {
-    return std::sqrt(dot(vector, vector));
-}
-
-bool normalize(
-    std::vector<double>& vector
-)
-{
-    const double vectorNorm = norm(vector);
-
-    if (!std::isfinite(vectorNorm) ||
-        vectorNorm <= ORTHOGONALIZATION_TOLERANCE)
+    if (vector.size() != expectedSize)
     {
-        return false;
-    }
-
-    for (double& value : vector)
-    {
-        value /= vectorNorm;
-    }
-
-    return true;
-}
-
-void orthogonalize(
-    std::vector<double>& vector,
-    const std::vector<std::vector<double>>& basis
-)
-{
-    /*
-     * Dos pasadas de Gram-Schmidt modifican la estabilidad numerica
-     * cuando el subespacio contiene vectores casi linealmente
-     * dependientes.
-     */
-    for (int pass = 0; pass < 2; ++pass)
-    {
-        for (const auto& basisVector : basis)
-        {
-            const double projection =
-                dot(vector, basisVector);
-
-            for (std::size_t i = 0;
-                 i < vector.size();
-                 ++i)
-            {
-                vector[i] -=
-                    projection * basisVector[i];
-            }
-        }
+        throw std::invalid_argument(message);
     }
 }
 
-bool makeIndependent(
-    std::vector<double>& vector,
-    const std::vector<std::vector<double>>& basis
-)
-{
-    orthogonalize(
-        vector,
-        basis
-    );
-
-    return normalize(vector);
-}
-
-std::vector<double> linearCombination(
+void validateBasisConsistency(
     const std::vector<std::vector<double>>& basis,
-    const std::vector<double>& coefficients
+    const std::vector<std::vector<double>>& hBasis,
+    std::size_t gridSize
 )
 {
-    if (basis.size() != coefficients.size())
+    if (basis.size() != hBasis.size())
     {
-        throw std::invalid_argument(
-            "Block-Davidson: dimensiones incompatibles en combinacion lineal."
+        throw std::runtime_error(
+            "La base y la base transformada por el Hamiltoniano "
+            "tienen diferente numero de vectores."
         );
     }
-
-    if (basis.empty())
-    {
-        return {};
-    }
-
-    std::vector<double> result(
-        basis.front().size(),
-        0.0
-    );
 
     for (std::size_t i = 0;
          i < basis.size();
          ++i)
     {
-        const double coefficient =
-            coefficients[i];
-
-        for (std::size_t j = 0;
-             j < result.size();
-             ++j)
+        if (basis[i].size() != gridSize)
         {
-            result[j] +=
-                coefficient * basis[i][j];
+            throw std::runtime_error(
+                "Un vector de la base no tiene el tamano de la malla."
+            );
+        }
+
+        if (hBasis[i].size() != gridSize)
+        {
+            throw std::runtime_error(
+                "Un vector de H aplicado a la base no tiene el tamano de la malla."
+            );
+        }
+    }
+}
+
+double dot(
+    const std::vector<double>& a,
+    const std::vector<double>& b,
+    std::size_t gridSize,
+    double volumeElement
+)
+{
+    validateVectorSize(
+        a,
+        gridSize,
+        "El primer vector no tiene el mismo tamano que la malla."
+    );
+
+    validateVectorSize(
+        b,
+        gridSize,
+        "El segundo vector no tiene el mismo tamano que la malla."
+    );
+
+    double result = 0.0;
+
+    for (std::size_t i = 0;
+         i < gridSize;
+         ++i)
+    {
+        result +=
+            a[i] *
+            b[i];
+    }
+
+    return result *
+           volumeElement;
+}
+
+double norm(
+    const std::vector<double>& vector,
+    std::size_t gridSize,
+    double volumeElement
+)
+{
+    const double value =
+        dot(
+            vector,
+            vector,
+            gridSize,
+            volumeElement
+        );
+
+    return std::sqrt(
+        std::max(
+            0.0,
+            value
+        )
+    );
+}
+
+void scale(
+    std::vector<double>& vector,
+    double factor,
+    std::size_t gridSize
+)
+{
+    validateVectorSize(
+        vector,
+        gridSize,
+        "El vector no tiene el mismo tamano que la malla."
+    );
+
+    for (std::size_t i = 0;
+         i < gridSize;
+         ++i)
+    {
+        vector[i] *= factor;
+    }
+}
+
+void axpy(
+    std::vector<double>& destination,
+    const std::vector<double>& source,
+    double factor,
+    std::size_t gridSize
+)
+{
+    validateVectorSize(
+        destination,
+        gridSize,
+        "El vector destino no tiene el mismo tamano que la malla."
+    );
+
+    validateVectorSize(
+        source,
+        gridSize,
+        "El vector fuente no tiene el mismo tamano que la malla."
+    );
+
+    for (std::size_t i = 0;
+         i < gridSize;
+         ++i)
+    {
+        destination[i] +=
+            factor *
+            source[i];
+    }
+}
+
+bool normalize(
+    std::vector<double>& vector,
+    std::size_t gridSize,
+    double volumeElement
+)
+{
+    const double vectorNorm =
+        norm(
+            vector,
+            gridSize,
+            volumeElement
+        );
+
+    if (!std::isfinite(vectorNorm) ||
+        vectorNorm <= LINEAR_DEPENDENCE_TOLERANCE)
+    {
+        return false;
+    }
+
+    scale(
+        vector,
+        1.0 / vectorNorm,
+        gridSize
+    );
+
+    return true;
+}
+
+void orthogonalizeOnce(
+    std::vector<double>& vector,
+    const std::vector<std::vector<double>>& basis,
+    std::size_t gridSize,
+    double volumeElement
+)
+{
+    for (const std::vector<double>& basisVector :
+         basis)
+    {
+        const double projection =
+            dot(
+                basisVector,
+                vector,
+                gridSize,
+                volumeElement
+            );
+
+        axpy(
+            vector,
+            basisVector,
+            -projection,
+            gridSize
+        );
+    }
+}
+
+bool orthogonalizeAndNormalize(
+    std::vector<double>& vector,
+    const std::vector<std::vector<double>>& basis,
+    std::size_t gridSize,
+    double volumeElement
+)
+{
+    orthogonalizeOnce(
+        vector,
+        basis,
+        gridSize,
+        volumeElement
+    );
+
+    /*
+     * Second Gram-Schmidt pass for numerical stability.
+     */
+    orthogonalizeOnce(
+        vector,
+        basis,
+        gridSize,
+        volumeElement
+    );
+
+    return normalize(
+        vector,
+        gridSize,
+        volumeElement
+    );
+}
+
+std::vector<double> linearCombination(
+    const std::vector<std::vector<double>>& basis,
+    const std::vector<double>& coefficients,
+    std::size_t gridSize
+)
+{
+    if (basis.size() !=
+        coefficients.size())
+    {
+        throw std::invalid_argument(
+            "La base y los coeficientes tienen diferentes dimensiones."
+        );
+    }
+
+    std::vector<double> result(
+        gridSize,
+        0.0
+    );
+
+    for (std::size_t j = 0;
+         j < basis.size();
+         ++j)
+    {
+        validateVectorSize(
+            basis[j],
+            gridSize,
+            "Un vector de la base no tiene el mismo tamano que la malla."
+        );
+
+        for (std::size_t i = 0;
+             i < gridSize;
+             ++i)
+        {
+            result[i] +=
+                coefficients[j] *
+                basis[j][i];
         }
     }
 
     return result;
 }
 
-std::vector<double> subtractScaled(
-    const std::vector<double>& a,
-    const std::vector<double>& b,
-    double scale
+void jacobiDiagonalize(
+    const std::vector<std::vector<double>>& input,
+    std::vector<double>& eigenvalues,
+    std::vector<std::vector<double>>& eigenvectors
 )
 {
-    if (a.size() != b.size())
+    const std::size_t dimension =
+        input.size();
+
+    if (dimension == 0)
     {
-        throw std::invalid_argument(
-            "Block-Davidson: dimensiones incompatibles en resta."
-        );
-    }
-
-    std::vector<double> result(a.size());
-
-    for (std::size_t i = 0;
-         i < a.size();
-         ++i)
-    {
-        result[i] =
-            a[i] -
-            scale * b[i];
-    }
-
-    return result;
-}
-
-struct SymmetricEigenResult
-{
-    std::vector<double> eigenvalues;
-    std::vector<std::vector<double>> eigenvectors;
-};
-
-SymmetricEigenResult diagonalizeSymmetric(
-    const std::vector<std::vector<double>>& input
-)
-{
-    const std::size_t n = input.size();
-
-    if (n == 0)
-    {
-        return {};
+        eigenvalues.clear();
+        eigenvectors.clear();
+        return;
     }
 
     for (const auto& row : input)
     {
-        if (row.size() != n)
+        if (row.size() != dimension)
         {
             throw std::invalid_argument(
-                "Block-Davidson: matriz proyectada no cuadrada."
+                "La matriz proyectada debe ser cuadrada."
             );
         }
     }
@@ -212,70 +357,120 @@ SymmetricEigenResult diagonalizeSymmetric(
     std::vector<std::vector<double>> matrix =
         input;
 
-    std::vector<std::vector<double>> eigenvectors(
-        n,
-        std::vector<double>(n, 0.0)
+    eigenvectors.assign(
+        dimension,
+        std::vector<double>(
+            dimension,
+            0.0
+        )
     );
 
-    for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t i = 0;
+         i < dimension;
+         ++i)
     {
         eigenvectors[i][i] = 1.0;
     }
 
-    for (std::size_t iteration = 0;
-         iteration < JACOBI_MAX_ITERATIONS;
-         ++iteration)
+    const std::size_t maximumSweeps =
+        std::max(
+            std::size_t(50),
+            10 *
+            dimension *
+            dimension
+        );
+
+    for (std::size_t sweep = 0;
+         sweep < maximumSweeps;
+         ++sweep)
     {
+        double maximumOffDiagonal =
+            0.0;
+
         std::size_t p = 0;
         std::size_t q = 0;
 
-        double maximumOffDiagonal = 0.0;
-
         for (std::size_t i = 0;
-             i < n;
+             i < dimension;
              ++i)
         {
             for (std::size_t j = i + 1;
-                 j < n;
+                 j < dimension;
                  ++j)
             {
-                const double magnitude =
-                    std::abs(matrix[i][j]);
+                const double value =
+                    std::abs(
+                        matrix[i][j]
+                    );
 
-                if (magnitude > maximumOffDiagonal)
+                if (value >
+                    maximumOffDiagonal)
                 {
-                    maximumOffDiagonal = magnitude;
+                    maximumOffDiagonal =
+                        value;
+
                     p = i;
                     q = j;
                 }
             }
         }
 
-        if (maximumOffDiagonal <
+        if (maximumOffDiagonal <=
             JACOBI_TOLERANCE)
         {
             break;
         }
 
-        const double app = matrix[p][p];
-        const double aqq = matrix[q][q];
-        const double apq = matrix[p][q];
+        const double app =
+            matrix[p][p];
 
-        const double theta =
-            0.5 *
-            std::atan2(
-                2.0 * apq,
-                aqq - app
+        const double aqq =
+            matrix[q][q];
+
+        const double apq =
+            matrix[p][q];
+
+        if (std::abs(apq) <=
+            JACOBI_TOLERANCE)
+        {
+            continue;
+        }
+
+        const double tau =
+            (aqq - app) /
+            (2.0 * apq);
+
+        const double sign =
+            tau >= 0.0
+                ? 1.0
+                : -1.0;
+
+        const double t =
+            sign /
+            (
+                std::abs(tau) +
+                std::sqrt(
+                    1.0 +
+                    tau * tau
+                )
             );
 
-        const double c = std::cos(theta);
-        const double s = std::sin(theta);
+        const double c =
+            1.0 /
+            std::sqrt(
+                1.0 +
+                t * t
+            );
+
+        const double s =
+            t * c;
 
         for (std::size_t k = 0;
-             k < n;
+             k < dimension;
              ++k)
         {
-            if (k == p || k == q)
+            if (k == p ||
+                k == q)
             {
                 continue;
             }
@@ -286,19 +481,25 @@ SymmetricEigenResult diagonalizeSymmetric(
             const double akq =
                 matrix[k][q];
 
-            matrix[k][p] =
+            const double newKp =
                 c * akp -
                 s * akq;
 
-            matrix[p][k] =
-                matrix[k][p];
-
-            matrix[k][q] =
+            const double newKq =
                 s * akp +
                 c * akq;
 
+            matrix[k][p] =
+                newKp;
+
+            matrix[p][k] =
+                newKp;
+
+            matrix[k][q] =
+                newKq;
+
             matrix[q][k] =
-                matrix[k][q];
+                newKq;
         }
 
         matrix[p][p] =
@@ -315,7 +516,7 @@ SymmetricEigenResult diagonalizeSymmetric(
         matrix[q][p] = 0.0;
 
         for (std::size_t k = 0;
-             k < n;
+             k < dimension;
              ++k)
         {
             const double vkp =
@@ -334,74 +535,148 @@ SymmetricEigenResult diagonalizeSymmetric(
         }
     }
 
-    std::vector<std::size_t> ordering(n);
+    eigenvalues.resize(
+        dimension
+    );
 
-    for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t i = 0;
+         i < dimension;
+         ++i)
     {
-        ordering[i] = i;
+        eigenvalues[i] =
+            matrix[i][i];
+    }
+
+    std::vector<std::size_t> order(
+        dimension
+    );
+
+    for (std::size_t i = 0;
+         i < dimension;
+         ++i)
+    {
+        order[i] = i;
     }
 
     std::sort(
-        ordering.begin(),
-        ordering.end(),
+        order.begin(),
+        order.end(),
         [&](std::size_t a,
             std::size_t b)
         {
-            return matrix[a][a] <
-                   matrix[b][b];
+            return eigenvalues[a] <
+                   eigenvalues[b];
         }
     );
 
-    SymmetricEigenResult result;
+    std::vector<double> sortedEigenvalues(
+        dimension
+    );
 
-    result.eigenvalues.resize(n);
-
-    result.eigenvectors.assign(
-        n,
+    std::vector<std::vector<double>> sortedEigenvectors(
+        dimension,
         std::vector<double>(
-            n,
+            dimension,
             0.0
         )
     );
 
-    for (std::size_t newIndex = 0;
-         newIndex < n;
-         ++newIndex)
+    for (std::size_t column = 0;
+         column < dimension;
+         ++column)
     {
-        const std::size_t oldIndex =
-            ordering[newIndex];
+        const std::size_t original =
+            order[column];
 
-        result.eigenvalues[newIndex] =
-            matrix[oldIndex][oldIndex];
+        sortedEigenvalues[column] =
+            eigenvalues[original];
 
         for (std::size_t row = 0;
-             row < n;
+             row < dimension;
              ++row)
         {
-            result.eigenvectors[row][newIndex] =
-                eigenvectors[row][oldIndex];
+            sortedEigenvectors[row][column] =
+                eigenvectors[row][original];
         }
     }
 
-    return result;
+    eigenvalues =
+        std::move(
+            sortedEigenvalues
+        );
+
+    eigenvectors =
+        std::move(
+            sortedEigenvectors
+        );
 }
 
-std::vector<std::vector<double>> buildProjectedHamiltonian(
+std::vector<std::vector<double>> applyHamiltonianToBasis(
+    const CartesianGrid& grid,
+    const std::vector<double>& effectivePotential,
     const std::vector<std::vector<double>>& basis,
-    const std::vector<std::vector<double>>& hBasis
+    std::size_t gridSize
 )
 {
-    const std::size_t dimension =
-        basis.size();
+    std::vector<std::vector<double>> hBasis;
 
-    if (hBasis.size() != dimension)
+    hBasis.reserve(
+        basis.size()
+    );
+
+    for (const std::vector<double>& vector :
+         basis)
     {
-        throw std::invalid_argument(
-            "Block-Davidson: basis y H*basis tienen dimensiones distintas."
+        validateVectorSize(
+            vector,
+            gridSize,
+            "Un vector de la base no tiene el mismo tamano que la malla."
+        );
+
+        std::vector<double> hVector =
+            applyMolecularKohnShamHamiltonian(
+                grid,
+                effectivePotential,
+                vector
+            );
+
+        validateVectorSize(
+            hVector,
+            gridSize,
+            "El Hamiltoniano produjo un vector con tamano incorrecto."
+        );
+
+        hBasis.push_back(
+            std::move(hVector)
         );
     }
 
-    std::vector<std::vector<double>> projected(
+    validateBasisConsistency(
+        basis,
+        hBasis,
+        gridSize
+    );
+
+    return hBasis;
+}
+
+std::vector<std::vector<double>> buildProjectedMatrix(
+    const std::vector<std::vector<double>>& basis,
+    const std::vector<std::vector<double>>& hBasis,
+    std::size_t gridSize,
+    double volumeElement
+)
+{
+    validateBasisConsistency(
+        basis,
+        hBasis,
+        gridSize
+    );
+
+    const std::size_t dimension =
+        basis.size();
+
+    std::vector<std::vector<double>> matrix(
         dimension,
         std::vector<double>(
             dimension,
@@ -420,618 +695,314 @@ std::vector<std::vector<double>> buildProjectedHamiltonian(
             const double value =
                 dot(
                     basis[i],
-                    hBasis[j]
+                    hBasis[j],
+                    gridSize,
+                    volumeElement
                 );
 
-            projected[i][j] = value;
-            projected[j][i] = value;
+            matrix[i][j] =
+                value;
+
+            matrix[j][i] =
+                value;
         }
     }
 
-    return projected;
+    return matrix;
 }
 
-std::vector<double> buildHamiltonianDiagonal(
-    const CartesianGrid& grid,
-    const std::vector<double>& effectivePotential
+std::vector<RitzState> calculateRitzStates(
+    const std::vector<std::vector<double>>& basis,
+    const std::vector<std::vector<double>>& hBasis,
+    std::size_t numberOfOrbitals,
+    std::size_t gridSize,
+    double volumeElement
+)
+{
+    validateBasisConsistency(
+        basis,
+        hBasis,
+        gridSize
+    );
+
+    if (basis.empty())
+    {
+        throw std::runtime_error(
+            "El subespacio Block-Davidson esta vacio."
+        );
+    }
+
+    const std::vector<std::vector<double>> projectedMatrix =
+        buildProjectedMatrix(
+            basis,
+            hBasis,
+            gridSize,
+            volumeElement
+        );
+
+    std::vector<double> eigenvalues;
+
+    std::vector<std::vector<double>> eigenvectors;
+
+    jacobiDiagonalize(
+        projectedMatrix,
+        eigenvalues,
+        eigenvectors
+    );
+
+    const std::size_t stateCount =
+        std::min(
+            numberOfOrbitals,
+            basis.size()
+        );
+
+    std::vector<RitzState> states;
+
+    states.reserve(
+        stateCount
+    );
+
+    for (std::size_t state = 0;
+         state < stateCount;
+         ++state)
+    {
+        std::vector<double> coefficients(
+            basis.size(),
+            0.0
+        );
+
+        for (std::size_t j = 0;
+             j < basis.size();
+             ++j)
+        {
+            coefficients[j] =
+                eigenvectors[j][state];
+        }
+
+        std::vector<double> psi =
+            linearCombination(
+                basis,
+                coefficients,
+                gridSize
+            );
+
+        if (!normalize(
+                psi,
+                gridSize,
+                volumeElement))
+        {
+            throw std::runtime_error(
+                "No fue posible normalizar un estado de Ritz."
+            );
+        }
+
+        std::vector<double> hPsi =
+            linearCombination(
+                hBasis,
+                coefficients,
+                gridSize
+            );
+
+        const double eigenvalue =
+            eigenvalues[state];
+
+        std::vector<double> residual =
+            hPsi;
+
+        axpy(
+            residual,
+            psi,
+            -eigenvalue,
+            gridSize
+        );
+
+        const double residualNorm =
+            norm(
+                residual,
+                gridSize,
+                volumeElement
+            );
+
+        RitzState ritzState;
+
+        ritzState.eigenvalue =
+            eigenvalue;
+
+        ritzState.psi =
+            std::move(psi);
+
+        ritzState.hPsi =
+            std::move(hPsi);
+
+        ritzState.residual =
+            std::move(residual);
+
+        ritzState.residualNorm =
+            residualNorm;
+
+        states.push_back(
+            std::move(ritzState)
+        );
+    }
+
+    return states;
+}
+
+std::vector<double> buildPreconditionedResidual(
+    const RitzState& state,
+    const std::vector<double>& effectivePotential,
+    const CartesianGrid& grid
 )
 {
     const std::size_t gridSize =
         grid.getSize();
 
-    if (effectivePotential.size() != gridSize)
-    {
-        throw std::invalid_argument(
-            "Block-Davidson: potencial efectivo incompatible con la malla."
-        );
-    }
+    validateVectorSize(
+        state.residual,
+        gridSize,
+        "El residuo no tiene el mismo tamano que la malla."
+    );
 
-    const double dx = grid.getDx();
-    const double dy = grid.getDy();
-    const double dz = grid.getDz();
+    validateVectorSize(
+        effectivePotential,
+        gridSize,
+        "El potencial efectivo no tiene el mismo tamano que la malla."
+    );
 
-    if (dx <= 0.0 ||
-        dy <= 0.0 ||
-        dz <= 0.0)
-    {
-        throw std::invalid_argument(
-            "Block-Davidson: los espaciamientos de la malla deben ser positivos."
-        );
-    }
+    const double dx =
+        grid.getDx();
 
-    /*
-     * Para el operador cinetico
-     *
-     *     -1/2 nabla^2
-     *
-     * discretizado mediante diferencias finitas centrales, la
-     * contribucion diagonal es
-     *
-     *     1/dx^2 + 1/dy^2 + 1/dz^2.
-     *
-     * La diagonal del Hamiltoniano es entonces
-     *
-     *     H_ii =
-     *         1/dx^2 +
-     *         1/dy^2 +
-     *         1/dz^2 +
-     *         V_eff(i).
-     */
-    const double kineticDiagonal =
+    const double dy =
+        grid.getDy();
+
+    const double dz =
+        grid.getDz();
+
+    const double diagonalKinetic =
         1.0 / (dx * dx) +
         1.0 / (dy * dy) +
         1.0 / (dz * dz);
 
-    std::vector<double> diagonal(
-        gridSize
+    std::vector<double> correction(
+        gridSize,
+        0.0
     );
 
     for (std::size_t i = 0;
          i < gridSize;
          ++i)
     {
-        diagonal[i] =
-            kineticDiagonal +
+        const double diagonal =
+            diagonalKinetic +
             effectivePotential[i];
-    }
 
-    return diagonal;
-}
+        double denominator =
+            state.eigenvalue -
+            diagonal;
 
-std::vector<double> buildSeed(
-    const CartesianGrid& grid,
-    std::size_t seedIndex
-)
-{
-    const std::size_t nx =
-        grid.getNx();
-
-    const std::size_t ny =
-        grid.getNy();
-
-    const std::size_t nz =
-        grid.getNz();
-
-    const double xmin =
-        grid.getXMin();
-
-    const double xmax =
-        grid.getXMax();
-
-    const double ymin =
-        grid.getYMin();
-
-    const double ymax =
-        grid.getYMax();
-
-    const double zmin =
-        grid.getZMin();
-
-    const double zmax =
-        grid.getZMax();
-
-    const double xCenter =
-        0.5 * (xmin + xmax);
-
-    const double yCenter =
-        0.5 * (ymin + ymax);
-
-    const double zCenter =
-        0.5 * (zmin + zmax);
-
-    const double xScale =
-        std::max(
-            0.5 * std::abs(xmax - xmin),
-            1.0
-        );
-
-    const double yScale =
-        std::max(
-            0.5 * std::abs(ymax - ymin),
-            1.0
-        );
-
-    const double zScale =
-        std::max(
-            0.5 * std::abs(zmax - zmin),
-            1.0
-        );
-
-    const std::size_t family =
-        seedIndex % 12;
-
-    const std::size_t frequency =
-        seedIndex / 12 + 1;
-
-    std::vector<double> seed(
-        grid.getSize(),
-        0.0
-    );
-
-    for (std::size_t i = 0;
-         i < nx;
-         ++i)
-    {
-        const double x =
-            (grid.getX(i) - xCenter) /
-            xScale;
-
-        const double sx =
-            (grid.getX(i) - xmin) /
+        const double denominatorScale =
             std::max(
-                xmax - xmin,
-                1.0
+                {
+                    1.0,
+                    std::abs(
+                        state.eigenvalue
+                    ),
+                    std::abs(
+                        diagonal
+                    )
+                }
             );
 
-        for (std::size_t j = 0;
-             j < ny;
-             ++j)
+        const double denominatorFloor =
+            1.0e-8 *
+            denominatorScale;
+
+        if (std::abs(denominator) <
+            denominatorFloor)
         {
-            const double y =
-                (grid.getY(j) - yCenter) /
-                yScale;
-
-            const double sy =
-                (grid.getY(j) - ymin) /
-                std::max(
-                    ymax - ymin,
-                    1.0
-                );
-
-            for (std::size_t k = 0;
-                 k < nz;
-                 ++k)
-            {
-                const double z =
-                    (grid.getZ(k) - zCenter) /
-                    zScale;
-
-                const double sz =
-                    (grid.getZ(k) - zmin) /
-                    std::max(
-                        zmax - zmin,
-                        1.0
-                    );
-
-                double value = 0.0;
-
-                if (seedIndex < 12)
-                {
-                    const double gaussian =
-                        std::exp(
-                            -0.5 *
-                            (x * x +
-                             y * y +
-                             z * z)
-                        );
-
-                    switch (family)
-                    {
-                        case 0:
-                            value = gaussian;
-                            break;
-
-                        case 1:
-                            value = x * gaussian;
-                            break;
-
-                        case 2:
-                            value = y * gaussian;
-                            break;
-
-                        case 3:
-                            value = z * gaussian;
-                            break;
-
-                        case 4:
-                            value = x * y * gaussian;
-                            break;
-
-                        case 5:
-                            value = x * z * gaussian;
-                            break;
-
-                        case 6:
-                            value = y * z * gaussian;
-                            break;
-
-                        case 7:
-                            value =
-                                (x * x -
-                                 y * y) *
-                                gaussian;
-                            break;
-
-                        case 8:
-                            value =
-                                (2.0 * z * z -
-                                 x * x -
-                                 y * y) *
-                                gaussian;
-                            break;
-
-                        case 9:
-                            value =
-                                (x * x +
-                                 y * y +
-                                 z * z) *
-                                gaussian;
-                            break;
-
-                        case 10:
-                            value =
-                                x * x * x *
-                                gaussian;
-                            break;
-
-                        case 11:
-                            value =
-                                y * y * y *
-                                gaussian;
-                            break;
-                    }
-                }
-                else
-                {
-                    const double pi =
-                        3.14159265358979323846;
-
-                    const double frequencyValue =
-                        static_cast<double>(
-                            frequency
-                        );
-
-                    switch (family % 6)
-                    {
-                        case 0:
-                            value =
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sx
-                                ) *
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sy
-                                ) *
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sz
-                                );
-                            break;
-
-                        case 1:
-                            value =
-                                std::cos(
-                                    frequencyValue *
-                                    pi * sx
-                                ) *
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sy
-                                ) *
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sz
-                                );
-                            break;
-
-                        case 2:
-                            value =
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sx
-                                ) *
-                                std::cos(
-                                    frequencyValue *
-                                    pi * sy
-                                ) *
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sz
-                                );
-                            break;
-
-                        case 3:
-                            value =
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sx
-                                ) *
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sy
-                                ) *
-                                std::cos(
-                                    frequencyValue *
-                                    pi * sz
-                                );
-                            break;
-
-                        case 4:
-                            value =
-                                std::cos(
-                                    frequencyValue *
-                                    pi * sx
-                                ) *
-                                std::cos(
-                                    frequencyValue *
-                                    pi * sy
-                                ) *
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sz
-                                );
-                            break;
-
-                        case 5:
-                            value =
-                                std::sin(
-                                    frequencyValue *
-                                    pi * sx
-                                ) *
-                                std::cos(
-                                    frequencyValue *
-                                    pi * sy
-                                ) *
-                                std::cos(
-                                    frequencyValue *
-                                    pi * sz
-                                );
-                            break;
-                    }
-                }
-
-                seed[
-                    grid.getIndex(i, j, k)
-                ] = value;
-            }
+            denominator =
+                denominator >= 0.0
+                    ? denominatorFloor
+                    : -denominatorFloor;
         }
+
+        correction[i] =
+            state.residual[i] /
+            denominator;
     }
 
-    return seed;
+    return correction;
 }
 
-bool addBasisVector(
+bool addIndependentVector(
+    std::vector<std::vector<double>>& target,
     std::vector<double> vector,
-    std::vector<std::vector<double>>& basis
+    const std::vector<std::vector<double>>& against,
+    std::size_t gridSize,
+    double volumeElement
 )
 {
-    if (!makeIndependent(
+    validateVectorSize(
+        vector,
+        gridSize,
+        "El vector candidato no tiene el mismo tamano que la malla."
+    );
+
+    orthogonalizeOnce(
+        vector,
+        against,
+        gridSize,
+        volumeElement
+    );
+
+    /*
+     * Second pass against the same accepted set.
+     */
+    orthogonalizeOnce(
+        vector,
+        against,
+        gridSize,
+        volumeElement
+    );
+
+    if (!normalize(
             vector,
-            basis))
+            gridSize,
+            volumeElement))
     {
         return false;
     }
 
-    basis.push_back(
+    target.push_back(
         std::move(vector)
     );
 
     return true;
 }
 
-struct RitzBlock
-{
-    std::vector<double> eigenvalues;
-    std::vector<std::vector<double>> orbitals;
-    std::vector<std::vector<double>> hOrbitals;
-    std::vector<std::vector<double>> residuals;
-    std::vector<double> residualNorms;
-};
-
-RitzBlock calculateRitzBlock(
-    const std::vector<std::vector<double>>& basis,
-    const std::vector<std::vector<double>>& hBasis,
+bool allConverged(
+    const std::vector<RitzState>& states,
     std::size_t numberOfOrbitals
 )
 {
-    const auto projected =
-        buildProjectedHamiltonian(
-            basis,
-            hBasis
-        );
-
-    const SymmetricEigenResult eigensystem =
-        diagonalizeSymmetric(
-            projected
-        );
-
-    if (eigensystem.eigenvalues.size() <
+    if (states.size() <
         numberOfOrbitals)
-    {
-        throw std::runtime_error(
-            "Block-Davidson: el subespacio no contiene suficientes estados."
-        );
-    }
-
-    RitzBlock block;
-
-    block.eigenvalues.resize(
-        numberOfOrbitals
-    );
-
-    block.orbitals.reserve(
-        numberOfOrbitals
-    );
-
-    block.hOrbitals.reserve(
-        numberOfOrbitals
-    );
-
-    block.residuals.reserve(
-        numberOfOrbitals
-    );
-
-    block.residualNorms.reserve(
-        numberOfOrbitals
-    );
-
-    for (std::size_t orbital = 0;
-         orbital < numberOfOrbitals;
-         ++orbital)
-    {
-        block.eigenvalues[orbital] =
-            eigensystem.eigenvalues[orbital];
-
-        std::vector<double> coefficients(
-            basis.size(),
-            0.0
-        );
-
-        for (std::size_t i = 0;
-             i < basis.size();
-             ++i)
-        {
-            coefficients[i] =
-                eigensystem.eigenvectors[i][orbital];
-        }
-
-        std::vector<double> orbitalVector =
-            linearCombination(
-                basis,
-                coefficients
-            );
-
-        std::vector<double> hOrbitalVector =
-            linearCombination(
-                hBasis,
-                coefficients
-            );
-
-        if (!normalize(orbitalVector))
-        {
-            throw std::runtime_error(
-                "Block-Davidson: no se pudo normalizar un orbital de Ritz."
-            );
-        }
-
-        /*
-         * Los coeficientes de un problema proyectado con una base
-         * ortonormal ya producen un vector normalizado. La normalizacion
-         * anterior solo corrige errores numericos acumulados.
-         */
-        const double orbitalNorm =
-            norm(orbitalVector);
-
-        if (orbitalNorm <=
-            ORTHOGONALIZATION_TOLERANCE)
-        {
-            throw std::runtime_error(
-                "Block-Davidson: norma invalida para un orbital de Ritz."
-            );
-        }
-
-        /*
-         * La combinacion H*V debe recibir exactamente la misma
-         * normalizacion que V.
-         */
-        for (double& value : hOrbitalVector)
-        {
-            value /= orbitalNorm;
-        }
-
-        const std::vector<double> residual =
-            subtractScaled(
-                hOrbitalVector,
-                orbitalVector,
-                block.eigenvalues[orbital]
-            );
-
-        block.orbitals.push_back(
-            std::move(orbitalVector)
-        );
-
-        block.hOrbitals.push_back(
-            std::move(hOrbitalVector)
-        );
-
-        block.residualNorms.push_back(
-            norm(residual)
-        );
-
-        block.residuals.push_back(
-            residual
-        );
-    }
-
-    return block;
-}
-
-std::vector<double> buildCorrection(
-    const std::vector<double>& residual,
-    double eigenvalue,
-    const std::vector<double>& hamiltonianDiagonal
-)
-{
-    std::vector<double> correction(
-        residual.size(),
-        0.0
-    );
-
-    for (std::size_t i = 0;
-         i < residual.size();
-         ++i)
-    {
-        const double denominator =
-            eigenvalue -
-            hamiltonianDiagonal[i];
-
-        if (std::isfinite(denominator) &&
-            std::abs(denominator) >
-                DENOMINATOR_TOLERANCE)
-        {
-            correction[i] =
-                residual[i] /
-                denominator;
-        }
-        else
-        {
-            /*
-             * Cuando el precondicionador diagonal presenta una
-             * singularidad local, el propio residual continua siendo
-             * una direccion valida de expansion.
-             */
-            correction[i] =
-                residual[i];
-        }
-    }
-
-    return correction;
-}
-
-bool converged(
-    const std::vector<double>& residualNorms
-)
-{
-    if (residualNorms.empty())
     {
         return false;
     }
 
-    for (const double residual : residualNorms)
+    for (std::size_t i = 0;
+         i < numberOfOrbitals;
+         ++i)
     {
-        if (!std::isfinite(residual) ||
-            residual >= RESIDUAL_TOLERANCE)
+        if (!std::isfinite(
+                states[i].residualNorm))
+        {
+            return false;
+        }
+
+        if (states[i].residualNorm >
+            RESIDUAL_TOLERANCE)
         {
             return false;
         }
@@ -1040,99 +1011,33 @@ bool converged(
     return true;
 }
 
-std::size_t maximumSubspaceDimension(
-    std::size_t numberOfOrbitals,
+void rebuildSubspace(
+    const CartesianGrid& grid,
+    const std::vector<double>& effectivePotential,
+    std::vector<std::vector<double>>& basis,
+    std::vector<std::vector<double>>& hBasis,
     std::size_t gridSize
 )
 {
-    const std::size_t requested =
-        numberOfOrbitals *
-        SUBSPACE_MULTIPLIER +
-        SUBSPACE_EXTRA;
-
-    return std::min(
-        gridSize,
-        std::max(
-            requested,
-            numberOfOrbitals
-        )
-    );
-}
-
-bool buildInitialBlock(
-    const CartesianGrid& grid,
-    std::size_t numberOfOrbitals,
-    const std::vector<MolecularOrbital>& initialOrbitals,
-    std::vector<std::vector<double>>& basis
-)
-{
-    basis.clear();
-
-    basis.reserve(
-        numberOfOrbitals
-    );
-
-    const std::size_t gridSize =
-        grid.getSize();
-
     /*
-     * Primero se aprovechan los orbitales iniciales proporcionados por
-     * el SCF. Cada uno se vuelve a proyectar contra el bloque para
-     * garantizar independencia lineal.
+     * This function deliberately reconstructs hBasis from basis.
+     *
+     * basis and hBasis are therefore never maintained independently
+     * across a restart.
      */
-    for (const MolecularOrbital& orbital :
-         initialOrbitals)
-    {
-        if (basis.size() >=
-            numberOfOrbitals)
-        {
-            break;
-        }
-
-        if (orbital.psi.size() !=
-            gridSize)
-        {
-            continue;
-        }
-
-        std::vector<double> vector =
-            orbital.psi;
-
-        addBasisVector(
-            std::move(vector),
-            basis
-        );
-    }
-
-    /*
-     * Si los orbitales iniciales no son suficientes o contienen
-     * vectores dependientes, se generan semillas deterministas.
-     */
-    const std::size_t maximumSeeds =
-        std::max<std::size_t>(
-            128,
-            numberOfOrbitals * 32
+    hBasis =
+        applyHamiltonianToBasis(
+            grid,
+            effectivePotential,
+            basis,
+            gridSize
         );
 
-    for (std::size_t seedIndex = 0;
-         basis.size() < numberOfOrbitals &&
-         seedIndex < maximumSeeds;
-         ++seedIndex)
-    {
-        std::vector<double> seed =
-            buildSeed(
-                grid,
-                seedIndex
-            );
-
-        addBasisVector(
-            std::move(seed),
-            basis
-        );
-    }
-
-    return basis.size() ==
-           numberOfOrbitals;
+    validateBasisConsistency(
+        basis,
+        hBasis,
+        gridSize
+    );
 }
 
 } // namespace
@@ -1153,7 +1058,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
     if (gridSize == 0)
     {
         throw std::invalid_argument(
-            "Block-Davidson: la malla no puede estar vacia."
+            "La malla cartesiana no puede estar vacia."
         );
     }
 
@@ -1161,7 +1066,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
         gridSize)
     {
         throw std::invalid_argument(
-            "Block-Davidson: el potencial efectivo no coincide con la malla."
+            "El potencial efectivo y la malla deben tener el mismo tamano."
         );
     }
 
@@ -1170,406 +1075,615 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
         return {};
     }
 
-    if (numberOfOrbitals > gridSize)
-    {
-        throw std::invalid_argument(
-            "Block-Davidson: el numero de orbitales excede el numero de puntos de la malla."
-        );
-    }
-
-    if (occupations.size() !=
+    if (occupations.size() <
         numberOfOrbitals)
     {
         throw std::invalid_argument(
-            "Block-Davidson: las ocupaciones no coinciden con el numero de orbitales."
+            "La lista de ocupaciones no contiene suficientes orbitales."
         );
-    }
-
-    for (const int electrons :
-         occupations)
-    {
-        if (electrons < 0 ||
-            electrons > 2)
-        {
-            throw std::invalid_argument(
-                "Block-Davidson: las ocupaciones deben estar entre 0 y 2."
-            );
-        }
     }
 
     if (maxIterations == 0)
     {
         throw std::invalid_argument(
-            "Block-Davidson: maxIterations debe ser mayor que cero."
+            "El numero maximo de iteraciones debe ser mayor que cero."
         );
     }
+
+    const double volumeElement =
+        getVolumeElement(
+            grid
+        );
 
     /*
-     * Diagonal aproximada utilizada exclusivamente por el
-     * precondicionador Davidson.
-     *
-     * No se utiliza para reemplazar al Hamiltoniano real.
+     * ---------------------------------------------------------------
+     * Initial subspace
+     * ---------------------------------------------------------------
      */
-    const std::vector<double> hamiltonianDiagonal =
-        buildHamiltonianDiagonal(
-            grid,
-            effectivePotential
-        );
-
     std::vector<std::vector<double>> basis;
 
-    if (!buildInitialBlock(
-            grid,
-            numberOfOrbitals,
-            initialOrbitals,
-            basis))
-    {
-        throw std::runtime_error(
-            "Block-Davidson: no fue posible construir un bloque inicial independiente."
-        );
-    }
-
-    const std::size_t maximumSubspace =
-        maximumSubspaceDimension(
-            numberOfOrbitals,
-            gridSize
-        );
-
-    std::vector<std::vector<double>> hBasis;
-
-    hBasis.reserve(
-        maximumSubspace
+    basis.reserve(
+        numberOfOrbitals +
+        EXTRA_SUBSPACE_VECTORS
     );
 
     /*
-     * Aplicamos H una sola vez a cada vector del bloque inicial.
-     * Estas aplicaciones quedan almacenadas y se reutilizan durante
-     * toda la diagonalizacion del subespacio.
+     * Previous SCF orbitals are preferred.
      */
-    for (const auto& vector : basis)
+    for (const MolecularOrbital& orbital :
+         initialOrbitals)
     {
-        std::vector<double> hVector =
-            applyMolecularKohnShamHamiltonian(
-                grid,
-                effectivePotential,
-                vector
-            );
-
-        if (hVector.size() !=
-            gridSize)
+        if (basis.size() >=
+            numberOfOrbitals)
         {
-            throw std::runtime_error(
-                "Block-Davidson: el Hamiltoniano devolvio una dimension incorrecta."
-            );
+            break;
         }
 
-        hBasis.push_back(
-            std::move(hVector)
-        );
-    }
-
-    RitzBlock lastBlock;
-
-    for (std::size_t iteration = 0;
-         iteration < maxIterations;
-         ++iteration)
-    {
-        RitzBlock block =
-            calculateRitzBlock(
-                basis,
-                hBasis,
-                numberOfOrbitals
-            );
-
-        lastBlock = block;
-
-        /*
-         * Todos los orbitales se consideran simultaneamente.
-         *
-         * Esto es la diferencia estructural fundamental respecto al
-         * Davidson secuencial: no existe un orbital anterior congelado
-         * como restriccion para resolver el siguiente.
-         */
-        if (converged(
-                block.residualNorms))
-        {
-            std::vector<MolecularOrbital> result;
-
-            result.reserve(
-                numberOfOrbitals
-            );
-
-            for (std::size_t orbital = 0;
-                 orbital < numberOfOrbitals;
-                 ++orbital)
-            {
-                MolecularOrbital molecularOrbital;
-
-                molecularOrbital.spin =
-                    spin;
-
-                molecularOrbital.electrons =
-                    occupations[orbital];
-
-                molecularOrbital.eigenvalue =
-                    block.eigenvalues[orbital];
-
-                molecularOrbital.psi =
-                    block.orbitals[orbital];
-
-                result.push_back(
-                    std::move(molecularOrbital)
-                );
-            }
-
-            return result;
-        }
-
-        /*
-         * Las correcciones de todos los estados no convergidos forman
-         * un nuevo bloque.
-         */
-        std::vector<std::vector<double>> corrections;
-
-        corrections.reserve(
-            numberOfOrbitals
-        );
-
-        for (std::size_t orbital = 0;
-             orbital < numberOfOrbitals;
-             ++orbital)
-        {
-            if (block.residualNorms[orbital] <
-                RESIDUAL_TOLERANCE)
-            {
-                continue;
-            }
-
-            std::vector<double> correction =
-                buildCorrection(
-                    block.residuals[orbital],
-                    block.eigenvalues[orbital],
-                    hamiltonianDiagonal
-                );
-
-            /*
-             * Las correcciones deben estar fuera del subespacio actual.
-             */
-            orthogonalize(
-                correction,
-                basis
-            );
-
-            /*
-             * Las correcciones del mismo bloque tambien deben ser
-             * mutuamente independientes.
-             */
-            orthogonalize(
-                correction,
-                corrections
-            );
-
-            if (!normalize(correction))
-            {
-                /*
-                 * Si el precondicionador produjo una direccion
-                 * degenerada, se utiliza directamente el residual.
-                 */
-                correction =
-                    block.residuals[orbital];
-
-                orthogonalize(
-                    correction,
-                    basis
-                );
-
-                orthogonalize(
-                    correction,
-                    corrections
-                );
-
-                if (!normalize(correction))
-                {
-                    continue;
-                }
-            }
-
-            corrections.push_back(
-                std::move(correction)
-            );
-        }
-
-        /*
-         * Expansion normal del subespacio.
-         */
-        bool expanded = false;
-
-        for (auto& correction :
-             corrections)
-        {
-            if (basis.size() >=
-                maximumSubspace)
-            {
-                break;
-            }
-
-            if (!addBasisVector(
-                    std::move(correction),
-                    basis))
-            {
-                continue;
-            }
-
-            std::vector<double> hCorrection =
-                applyMolecularKohnShamHamiltonian(
-                    grid,
-                    effectivePotential,
-                    basis.back()
-                );
-
-            if (hCorrection.size() !=
-                gridSize)
-            {
-                throw std::runtime_error(
-                    "Block-Davidson: dimension incorrecta al aplicar H a una correccion."
-                );
-            }
-
-            hBasis.push_back(
-                std::move(hCorrection)
-            );
-
-            expanded = true;
-        }
-
-        if (expanded)
+        if (orbital.spin !=
+            spin)
         {
             continue;
         }
 
-        /*
-         * Si no hay espacio suficiente para las correcciones, se hace
-         * un restart del subespacio.
-         *
-         * Se conservan simultaneamente todos los Ritz vectors actuales.
-         */
-        basis.clear();
-        hBasis.clear();
-
-        basis.reserve(
-            maximumSubspace
-        );
-
-        hBasis.reserve(
-            maximumSubspace
-        );
-
-        for (std::size_t orbital = 0;
-             orbital < numberOfOrbitals;
-             ++orbital)
+        if (orbital.psi.size() !=
+            gridSize)
         {
-            std::vector<double> vector =
-                block.orbitals[orbital];
+            continue;
+        }
 
-            if (!addBasisVector(
-                    std::move(vector),
-                    basis))
-            {
-                continue;
-            }
+        std::vector<double> vector =
+            orbital.psi;
 
-            std::vector<double> hVector =
-                applyMolecularKohnShamHamiltonian(
-                    grid,
-                    effectivePotential,
-                    basis.back()
+        if (orthogonalizeAndNormalize(
+                vector,
+                basis,
+                gridSize,
+                volumeElement))
+        {
+            basis.push_back(
+                std::move(vector)
+            );
+        }
+    }
+
+    /*
+     * Deterministic initial functions for missing states.
+     */
+    std::size_t seedIndex = 0;
+
+    while (basis.size() <
+           numberOfOrbitals)
+    {
+        std::vector<double> seed(
+            gridSize,
+            0.0
+        );
+
+        const double pi =
+            3.1415926535897932384626433832795;
+
+        const double frequency =
+            1.0 +
+            static_cast<double>(
+                seedIndex % 32
+            );
+
+        const double phase =
+            0.271 *
+            static_cast<double>(
+                seedIndex
+            );
+
+        if (gridSize == 1)
+        {
+            seed[0] = 1.0;
+        }
+        else
+        {
+            const double denominator =
+                static_cast<double>(
+                    gridSize - 1
                 );
 
-            if (hVector.size() !=
-                gridSize)
+            for (std::size_t i = 0;
+                 i < gridSize;
+                 ++i)
+            {
+                const double x =
+                    static_cast<double>(i) /
+                    denominator;
+
+                const double envelope =
+                    std::sin(
+                        pi * x
+                    );
+
+                seed[i] =
+                    envelope *
+                    (
+                        std::sin(
+                            pi *
+                            frequency *
+                            x +
+                            phase
+                        ) +
+                        0.25 *
+                        std::cos(
+                            2.0 *
+                            pi *
+                            x *
+                            (
+                                1.0 +
+                                0.125 *
+                                static_cast<double>(
+                                    seedIndex % 8
+                                )
+                            )
+                        )
+                    );
+            }
+        }
+
+        ++seedIndex;
+
+        if (!orthogonalizeAndNormalize(
+                seed,
+                basis,
+                gridSize,
+                volumeElement))
+        {
+            if (seedIndex >
+                100000)
             {
                 throw std::runtime_error(
-                    "Block-Davidson: dimension incorrecta durante restart."
+                    "No fue posible construir un subespacio inicial "
+                    "linealmente independiente."
                 );
             }
 
-            hBasis.push_back(
-                std::move(hVector)
+            continue;
+        }
+
+        basis.push_back(
+            std::move(seed)
+        );
+    }
+
+    /*
+     * hBasis is created exclusively from basis.
+     */
+    std::vector<std::vector<double>> hBasis;
+
+    rebuildSubspace(
+        grid,
+        effectivePotential,
+        basis,
+        hBasis,
+        gridSize
+    );
+
+    const std::size_t maximumSubspaceDimension =
+        std::min(
+            gridSize,
+            numberOfOrbitals +
+            EXTRA_SUBSPACE_VECTORS
+        );
+
+    std::vector<RitzState> states;
+
+    bool converged =
+        false;
+
+    /*
+     * ---------------------------------------------------------------
+     * Block-Davidson iterations
+     * ---------------------------------------------------------------
+     */
+    for (std::size_t iteration = 0;
+         iteration < maxIterations;
+         ++iteration)
+    {
+        validateBasisConsistency(
+            basis,
+            hBasis,
+            gridSize
+        );
+
+        states =
+            calculateRitzStates(
+                basis,
+                hBasis,
+                numberOfOrbitals,
+                gridSize,
+                volumeElement
             );
+
+        if (allConverged(
+                states,
+                numberOfOrbitals))
+        {
+            converged =
+                true;
+
+            break;
         }
 
         /*
-         * Despues del restart se intenta incorporar inmediatamente
-         * las correcciones que aun sean independientes.
+         * -----------------------------------------------------------
+         * Build correction block.
+         * -----------------------------------------------------------
          */
-        for (std::size_t orbital = 0;
-             orbital < numberOfOrbitals;
-             ++orbital)
+        std::vector<std::vector<double>> correctionBlock;
+
+        correctionBlock.reserve(
+            numberOfOrbitals
+        );
+
+        for (std::size_t state = 0;
+             state < numberOfOrbitals;
+             ++state)
         {
-            if (block.residualNorms[orbital] <
+            if (states[state].residualNorm <=
                 RESIDUAL_TOLERANCE)
             {
                 continue;
             }
 
-            if (basis.size() >=
-                maximumSubspace)
-            {
-                break;
-            }
-
             std::vector<double> correction =
-                buildCorrection(
-                    block.residuals[orbital],
-                    block.eigenvalues[orbital],
-                    hamiltonianDiagonal
+                buildPreconditionedResidual(
+                    states[state],
+                    effectivePotential,
+                    grid
                 );
 
-            if (!addBasisVector(
+            std::vector<std::vector<double>> against =
+                basis;
+
+            for (const auto& accepted :
+                 correctionBlock)
+            {
+                against.push_back(
+                    accepted
+                );
+            }
+
+            if (!addIndependentVector(
+                    correctionBlock,
                     std::move(correction),
-                    basis))
+                    against,
+                    gridSize,
+                    volumeElement))
+            {
+                /*
+                 * The preconditioner produced a dependent direction.
+                 * Use the physical residual itself.
+                 */
+                std::vector<double> residual =
+                    states[state].residual;
+
+                against =
+                    basis;
+
+                for (const auto& accepted :
+                     correctionBlock)
+                {
+                    against.push_back(
+                        accepted
+                    );
+                }
+
+                addIndependentVector(
+                    correctionBlock,
+                    std::move(residual),
+                    against,
+                    gridSize,
+                    volumeElement
+                );
+            }
+        }
+
+        if (correctionBlock.empty())
+        {
+            break;
+        }
+
+        /*
+         * -----------------------------------------------------------
+         * If there is enough room, expand normally.
+         * -----------------------------------------------------------
+         */
+        const std::size_t availableSpace =
+            maximumSubspaceDimension >
+                    basis.size()
+                ? maximumSubspaceDimension -
+                  basis.size()
+                : 0;
+
+        if (availableSpace > 0)
+        {
+            const std::size_t numberToAdd =
+                std::min(
+                    availableSpace,
+                    correctionBlock.size()
+                );
+
+            for (std::size_t i = 0;
+                 i < numberToAdd;
+                 ++i)
+            {
+                basis.push_back(
+                    std::move(
+                        correctionBlock[i]
+                    )
+                );
+            }
+
+            rebuildSubspace(
+                grid,
+                effectivePotential,
+                basis,
+                hBasis,
+                gridSize
+            );
+
+            continue;
+        }
+
+        /*
+         * -----------------------------------------------------------
+         * Restart.
+         *
+         * Keep:
+         *
+         *   - requested Ritz vectors;
+         *   - independent correction directions.
+         *
+         * IMPORTANT:
+         * hBasis is NOT copied or partially modified here.
+         * It is rebuilt completely from the new basis.
+         * -----------------------------------------------------------
+         */
+        std::vector<std::vector<double>> restartedBasis;
+
+        restartedBasis.reserve(
+            maximumSubspaceDimension
+        );
+
+        for (std::size_t state = 0;
+             state < numberOfOrbitals;
+             ++state)
+        {
+            std::vector<double> vector =
+                states[state].psi;
+
+            if (!orthogonalizeAndNormalize(
+                    vector,
+                    restartedBasis,
+                    gridSize,
+                    volumeElement))
             {
                 continue;
             }
 
-            std::vector<double> hCorrection =
-                applyMolecularKohnShamHamiltonian(
-                    grid,
-                    effectivePotential,
-                    basis.back()
-                );
-
-            if (hCorrection.size() !=
-                gridSize)
-            {
-                throw std::runtime_error(
-                    "Block-Davidson: dimension incorrecta al agregar correccion despues de restart."
-                );
-            }
-
-            hBasis.push_back(
-                std::move(hCorrection)
+            restartedBasis.push_back(
+                std::move(vector)
             );
         }
-    }
 
-    double maximumResidual = 0.0;
+        for (const std::vector<double>& correction :
+             correctionBlock)
+        {
+            if (restartedBasis.size() >=
+                maximumSubspaceDimension)
+            {
+                break;
+            }
 
-    for (const double residual :
-         lastBlock.residualNorms)
-    {
-        maximumResidual =
-            std::max(
-                maximumResidual,
-                residual
+            std::vector<double> vector =
+                correction;
+
+            if (!orthogonalizeAndNormalize(
+                    vector,
+                    restartedBasis,
+                    gridSize,
+                    volumeElement))
+            {
+                continue;
+            }
+
+            restartedBasis.push_back(
+                std::move(vector)
             );
+        }
+
+        /*
+         * The restart must preserve at least the requested number of
+         * linearly independent states.
+         */
+        if (restartedBasis.size() <
+            numberOfOrbitals)
+        {
+            throw std::runtime_error(
+                "El restart de Block-Davidson no pudo conservar "
+                "un subespacio suficiente."
+            );
+        }
+
+        basis =
+            std::move(
+                restartedBasis
+            );
+
+        /*
+         * This is the critical consistency operation:
+         *
+         * basis and hBasis are reconstructed together.
+         */
+        rebuildSubspace(
+            grid,
+            effectivePotential,
+            basis,
+            hBasis,
+            gridSize
+        );
     }
 
-    throw std::runtime_error(
-        "El solver Block-Davidson molecular no convergio. "
-        "Maximo residual = " +
-        std::to_string(maximumResidual) +
-        ", iteraciones = " +
-        std::to_string(maxIterations)
+    /*
+     * ---------------------------------------------------------------
+     * Final Ritz extraction.
+     * ---------------------------------------------------------------
+     */
+    validateBasisConsistency(
+        basis,
+        hBasis,
+        gridSize
     );
+
+    states =
+        calculateRitzStates(
+            basis,
+            hBasis,
+            numberOfOrbitals,
+            gridSize,
+            volumeElement
+        );
+
+    if (!allConverged(
+            states,
+            numberOfOrbitals))
+    {
+        throw std::runtime_error(
+            "Block-Davidson no convergio dentro del numero maximo de iteraciones."
+        );
+    }
+
+    /*
+     * ---------------------------------------------------------------
+     * Final physical orthonormalization.
+     * ---------------------------------------------------------------
+     */
+    std::vector<MolecularOrbital> orbitals;
+
+    orbitals.reserve(
+        numberOfOrbitals
+    );
+
+    std::vector<std::vector<double>> finalBasis;
+
+    finalBasis.reserve(
+        numberOfOrbitals
+    );
+
+    for (std::size_t state = 0;
+         state < numberOfOrbitals;
+         ++state)
+    {
+        std::vector<double> psi =
+            states[state].psi;
+
+        if (!orthogonalizeAndNormalize(
+                psi,
+                finalBasis,
+                gridSize,
+                volumeElement))
+        {
+            throw std::runtime_error(
+                "No fue posible ortonormalizar "
+                "los orbitales moleculares finales."
+            );
+        }
+
+        finalBasis.push_back(
+            psi
+        );
+
+        const std::vector<double> hPsi =
+            applyMolecularKohnShamHamiltonian(
+                grid,
+                effectivePotential,
+                psi
+            );
+
+        validateVectorSize(
+            hPsi,
+            gridSize,
+            "El Hamiltoniano produjo un orbital final "
+            "con tamano incorrecto."
+        );
+
+        const double eigenvalue =
+            dot(
+                psi,
+                hPsi,
+                gridSize,
+                volumeElement
+            );
+
+        if (!std::isfinite(
+                eigenvalue))
+        {
+            throw std::runtime_error(
+                "El autovalor molecular obtenido no es finito."
+            );
+        }
+
+        /*
+         * Verify the final physical residual after the final
+         * orthonormalization.
+         */
+        std::vector<double> residual =
+            hPsi;
+
+        axpy(
+            residual,
+            psi,
+            -eigenvalue,
+            gridSize
+        );
+
+        const double residualNorm =
+            norm(
+                residual,
+                gridSize,
+                volumeElement
+            );
+
+        if (!std::isfinite(
+                residualNorm) ||
+            residualNorm >
+                RESIDUAL_TOLERANCE)
+        {
+            throw std::runtime_error(
+                "El orbital molecular final no satisface "
+                "el criterio de residuo de Block-Davidson."
+            );
+        }
+
+        MolecularOrbital orbital;
+
+        orbital.spin =
+            spin;
+
+        orbital.electrons =
+            occupations[state];
+
+        orbital.eigenvalue =
+            eigenvalue;
+
+        orbital.psi =
+            std::move(psi);
+
+        orbitals.push_back(
+            std::move(orbital)
+        );
+    }
+
+    if (!converged)
+    {
+        throw std::runtime_error(
+            "Block-Davidson finalizo sin una solucion convergida."
+        );
+    }
+
+    return orbitals;
 }

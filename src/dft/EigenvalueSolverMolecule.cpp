@@ -1,5 +1,6 @@
 #include "EigenvalueSolverMolecule.h"
 
+#include "BlockDavidsonMolecule.h"
 #include "DavidsonMath.h"
 #include "DavidsonNumerical.h"
 #include "KohnShamHamiltonianMolecule.h"
@@ -17,6 +18,14 @@ namespace {
 constexpr double MO_RESIDUAL_TOLERANCE = 1.0e-7;
 constexpr double SUBSPACE_TOLERANCE = 1.0e-12;
 constexpr std::size_t MAX_SUBSPACE_DIMENSION = 16;
+
+enum class MolecularOrbitalSolver {
+    Davidson,
+    BlockDavidson
+};
+
+constexpr MolecularOrbitalSolver ACTIVE_MOLECULAR_ORBITAL_SOLVER =
+    MolecularOrbitalSolver::BlockDavidson;
 
 
 const char* spinName(
@@ -75,15 +84,12 @@ MolecularOrbital solveMolecularOrbital(
         );
     }
 
-    const std::size_t dimension =
-        grid.getSize();
-
     std::cerr
         << "[MO-DEBUG] START"
         << " orbital=" << orbitalIndex
         << " spin=" << spinName(spin)
         << " electrons=" << electrons
-        << " dimension=" << dimension
+        << " dimension=" << grid.getSize()
         << " maxH=" << maxIterations
         << " previous=" << previousOrbitals.size()
         << " initialGuess=" << (
@@ -249,17 +255,6 @@ MolecularOrbital solveMolecularOrbital(
             );
 
 
-        /*
-         * El vector de Ritz pertenece directamente al
-         * subespacio de Davidson que acaba de ser
-         * diagonalizado.
-         *
-         * La base ya fue construida ortogonalmente
-         * respecto a los orbitales anteriores. Por tanto,
-         * NO se vuelve a proyectar el Ritz contra ellos:
-         * hacerlo modificaria el autovector asociado al
-         * autovalor proyectado.
-         */
         std::vector<double> ritz =
             davidsonCombine(
                 basis,
@@ -355,24 +350,13 @@ MolecularOrbital solveMolecularOrbital(
         }
 
 
-        /*
-         * Residuo Ritz:
-         *
-         *     r = H v - theta v
-         *
-         * Para el autovector del problema proyectado,
-         * este residuo es ortogonal al subespacio actual
-         * en aritmetica exacta. Por ello NO se proyecta
-         * directamente contra basis antes de comprobar
-         * su norma.
-         */
         std::vector<double> residual(
-            dimension,
+            grid.getSize(),
             0.0
         );
 
         for (std::size_t i = 0;
-             i < dimension;
+             i < grid.getSize();
              ++i) {
 
             residual[i] =
@@ -412,11 +396,6 @@ MolecularOrbital solveMolecularOrbital(
             << "\n";
 
 
-        /*
-         * La tolerancia de dependencia se aplica al
-         * residual fisico antes de cualquier operacion
-         * de precondicionamiento.
-         */
         if (!davidsonValidNorm(
                 residual,
                 dV,
@@ -433,13 +412,6 @@ MolecularOrbital solveMolecularOrbital(
                 << " threshold=" << SUBSPACE_TOLERANCE
                 << "\n";
 
-            /*
-             * Si la magnitud del residual es pequena
-             * respecto al umbral de independencia, no
-             * se intenta fabricar una direccion a partir
-             * de el. Se solicita una nueva direccion
-             * determinista para continuar el subespacio.
-             */
             std::vector<double> independent;
 
             if (!davidsonBuildIndependentVector(
@@ -592,9 +564,6 @@ MolecularOrbital solveMolecularOrbital(
         }
 
 
-        /*
-         * Precondicionamiento de Davidson.
-         */
         std::vector<double> correction =
             davidsonBuildCorrection(
                 residual,
@@ -626,11 +595,6 @@ MolecularOrbital solveMolecularOrbital(
             << "\n";
 
 
-        /*
-         * La correccion se proyecta una sola vez contra
-         * los orbitales anteriores y contra el subespacio
-         * Davidson actual.
-         */
         const bool correctionValid =
             davidsonAppendIndependentCorrection(
                 correction,
@@ -654,14 +618,6 @@ MolecularOrbital solveMolecularOrbital(
             << "\n";
 
 
-        /*
-         * Si el precondicionador destruye la direccion,
-         * se recupera a partir del residual original.
-         *
-         * El residual ya esta separado de los orbitales
-         * anteriores. Aqui solamente se elimina cualquier
-         * componente numerica contra basis.
-         */
         if (!correctionValid) {
 
             std::cerr
@@ -691,12 +647,6 @@ MolecularOrbital solveMolecularOrbital(
                     << " reason=raw_residual_rejected"
                     << "\n";
 
-                /*
-                 * El residual puede ser pequeno pero aun
-                 * no suficientemente pequeno para satisfacer
-                 * la convergencia. En ese caso se construye
-                 * una direccion determinista independiente.
-                 */
                 if (!davidsonBuildIndependentVector(
                         grid,
                         orbitalIndex + basis.size(),
@@ -786,12 +736,6 @@ MolecularOrbital solveMolecularOrbital(
         }
 
 
-        /*
-         * Reinicio Davidson:
-         *
-         * Se conserva el Ritz actual y la correccion
-         * como una base minima de dos dimensiones.
-         */
         std::vector<double> hCorrection =
             applyMolecularKohnShamHamiltonian(
                 grid,
@@ -949,42 +893,71 @@ std::vector<MolecularOrbital> solveMolecularOrbitals(
         );
     }
 
-    std::vector<MolecularOrbital> orbitals;
+    for (const int occupation : occupations) {
 
-    orbitals.reserve(
-        numberOfOrbitals
-    );
-
-    for (std::size_t i = 0;
-         i < numberOfOrbitals;
-         ++i) {
-
-        if (occupations[i] < 0 ||
-            occupations[i] > 2) {
+        if (occupation < 0 ||
+            occupation > 2) {
 
             throw std::invalid_argument(
                 "Ocupacion orbital invalida."
             );
         }
-
-        const MolecularOrbital* initialGuess =
-            initialOrbitals.empty()
-                ? nullptr
-                : &initialOrbitals[i];
-
-        orbitals.push_back(
-            solveMolecularOrbital(
-                grid,
-                effectivePotential,
-                i,
-                spin,
-                occupations[i],
-                orbitals,
-                initialGuess,
-                maxIterations
-            )
-        );
     }
 
-    return orbitals;
+
+    switch (ACTIVE_MOLECULAR_ORBITAL_SOLVER) {
+
+        case MolecularOrbitalSolver::Davidson:
+        {
+            std::vector<MolecularOrbital> orbitals;
+
+            orbitals.reserve(
+                numberOfOrbitals
+            );
+
+            for (std::size_t i = 0;
+                 i < numberOfOrbitals;
+                 ++i) {
+
+                const MolecularOrbital* initialGuess =
+                    initialOrbitals.empty()
+                        ? nullptr
+                        : &initialOrbitals[i];
+
+                orbitals.push_back(
+                    solveMolecularOrbital(
+                        grid,
+                        effectivePotential,
+                        i,
+                        spin,
+                        occupations[i],
+                        orbitals,
+                        initialGuess,
+                        maxIterations
+                    )
+                );
+            }
+
+            return orbitals;
+        }
+
+
+        case MolecularOrbitalSolver::BlockDavidson:
+        {
+            return solveMolecularOrbitalsBlockDavidson(
+                grid,
+                effectivePotential,
+                numberOfOrbitals,
+                occupations,
+                spin,
+                initialOrbitals,
+                maxIterations
+            );
+        }
+    }
+
+
+    throw std::runtime_error(
+        "Solver de orbitales moleculares no reconocido."
+    );
 }
