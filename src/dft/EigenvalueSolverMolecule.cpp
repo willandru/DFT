@@ -18,6 +18,15 @@ constexpr double MO_RESIDUAL_TOLERANCE = 1.0e-7;
 constexpr double SUBSPACE_TOLERANCE = 1.0e-12;
 constexpr std::size_t MAX_SUBSPACE_DIMENSION = 16;
 
+
+const char* spinName(
+    SpinChannel spin
+) {
+    return spin == SpinChannel::Alpha
+        ? "Alpha"
+        : "Beta";
+}
+
 }
 
 
@@ -69,6 +78,22 @@ MolecularOrbital solveMolecularOrbital(
     const std::size_t dimension =
         grid.getSize();
 
+    std::cerr
+        << "[MO-DEBUG] START"
+        << " orbital=" << orbitalIndex
+        << " spin=" << spinName(spin)
+        << " electrons=" << electrons
+        << " dimension=" << dimension
+        << " maxH=" << maxIterations
+        << " previous=" << previousOrbitals.size()
+        << " initialGuess=" << (
+            initialGuess != nullptr
+                ? "yes"
+                : "no"
+        )
+        << "\n";
+
+
     const std::vector<double> diagonal =
         davidsonBuildHamiltonianDiagonal(
             grid,
@@ -76,6 +101,8 @@ MolecularOrbital solveMolecularOrbital(
         );
 
     std::vector<double> initialVector;
+
+    bool usedInitialGuess = false;
 
     if (initialGuess != nullptr &&
         davidsonBuildInitialFromPrevious(
@@ -85,6 +112,8 @@ MolecularOrbital solveMolecularOrbital(
             dV,
             initialVector
         )) {
+
+        usedInitialGuess = true;
 
     } else if (!davidsonBuildIndependentVector(
                    grid,
@@ -98,6 +127,18 @@ MolecularOrbital solveMolecularOrbital(
             "No se pudo construir el vector inicial."
         );
     }
+
+    std::cerr
+        << "[MO-DEBUG] INITIAL"
+        << " orbital=" << orbitalIndex
+        << " spin=" << spinName(spin)
+        << " source=" << (
+            usedInitialGuess
+                ? "previous"
+                : "independent"
+        )
+        << "\n";
+
 
     std::vector<std::vector<double>> basis;
     std::vector<std::vector<double>> hBasis;
@@ -118,6 +159,7 @@ MolecularOrbital solveMolecularOrbital(
         projectedHamiltonian;
 
     std::size_t hApplications = 0;
+    std::size_t davidsonIterations = 0;
 
     double finalEigenvalue =
         std::numeric_limits<double>::infinity();
@@ -129,6 +171,18 @@ MolecularOrbital solveMolecularOrbital(
 
 
     while (hApplications < maxIterations) {
+
+        ++davidsonIterations;
+
+        std::cerr
+            << "[MO-DEBUG] ITER_START"
+            << " orbital=" << orbitalIndex
+            << " spin=" << spinName(spin)
+            << " iter=" << davidsonIterations
+            << " H=" << hApplications
+            << " basis=" << basis.size()
+            << "\n";
+
 
         if (hBasis.size() < basis.size()) {
 
@@ -144,6 +198,16 @@ MolecularOrbital solveMolecularOrbital(
             );
 
             ++hApplications;
+
+            std::cerr
+                << "[MO-DEBUG] H_BASIS"
+                << " orbital=" << orbitalIndex
+                << " spin=" << spinName(spin)
+                << " basisIndex=" << index
+                << " H=" << hApplications
+                << " basis=" << basis.size()
+                << "\n";
+
 
             const std::size_t size =
                 basis.size();
@@ -244,8 +308,31 @@ MolecularOrbital solveMolecularOrbital(
             ritz;
 
 
+        std::cerr
+            << "[MO-DEBUG] RITZ"
+            << " orbital=" << orbitalIndex
+            << " spin=" << spinName(spin)
+            << " iter=" << davidsonIterations
+            << " basis=" << basis.size()
+            << " H=" << hApplications
+            << " eigenvalue=" << finalEigenvalue
+            << " residual=" << finalResidual
+            << "\n";
+
+
         if (finalResidual <
             MO_RESIDUAL_TOLERANCE) {
+
+            std::cerr
+                << "[MO-DEBUG] CONVERGED"
+                << " orbital=" << orbitalIndex
+                << " spin=" << spinName(spin)
+                << " iter=" << davidsonIterations
+                << " basis=" << basis.size()
+                << " H=" << hApplications
+                << " eigenvalue=" << finalEigenvalue
+                << " residual=" << finalResidual
+                << "\n";
 
             std::cout
                 << "Orbital "
@@ -300,6 +387,31 @@ MolecularOrbital solveMolecularOrbital(
             dV
         );
 
+
+        const double residualNormSquared =
+            davidsonNormSquared(
+                residual,
+                dV
+            );
+
+        const double residualNorm =
+            std::isfinite(residualNormSquared) &&
+            residualNormSquared >= 0.0
+                ? std::sqrt(residualNormSquared)
+                : std::numeric_limits<double>::infinity();
+
+
+        std::cerr
+            << "[MO-DEBUG] RESIDUAL"
+            << " orbital=" << orbitalIndex
+            << " spin=" << spinName(spin)
+            << " iter=" << davidsonIterations
+            << " physicalResidual=" << finalResidual
+            << " orthogonalizedResidual=" << residualNorm
+            << " basis=" << basis.size()
+            << "\n";
+
+
         /*
          * La tolerancia de dependencia se aplica al
          * residual fisico antes de cualquier operacion
@@ -311,6 +423,15 @@ MolecularOrbital solveMolecularOrbital(
                 SUBSPACE_TOLERANCE *
                 SUBSPACE_TOLERANCE
             )) {
+
+            std::cerr
+                << "[MO-DEBUG] RESIDUAL_REJECTED"
+                << " orbital=" << orbitalIndex
+                << " spin=" << spinName(spin)
+                << " iter=" << davidsonIterations
+                << " residual=" << residualNorm
+                << " threshold=" << SUBSPACE_TOLERANCE
+                << "\n";
 
             /*
              * Si la magnitud del residual es pequena
@@ -364,6 +485,16 @@ MolecularOrbital solveMolecularOrbital(
             if (basis.size() <
                 MAX_SUBSPACE_DIMENSION) {
 
+                std::cerr
+                    << "[MO-DEBUG] EXPAND"
+                    << " orbital=" << orbitalIndex
+                    << " spin=" << spinName(spin)
+                    << " iter=" << davidsonIterations
+                    << " oldBasis=" << basis.size()
+                    << " newBasis=" << basis.size() + 1
+                    << " reason=independent"
+                    << "\n";
+
                 basis.push_back(
                     std::move(independent)
                 );
@@ -373,6 +504,16 @@ MolecularOrbital solveMolecularOrbital(
 
             if (hApplications >=
                 maxIterations) {
+
+                std::cerr
+                    << "[MO-DEBUG] LIMIT"
+                    << " orbital=" << orbitalIndex
+                    << " spin=" << spinName(spin)
+                    << " iter=" << davidsonIterations
+                    << " H=" << hApplications
+                    << " basis=" << basis.size()
+                    << " reason=independent_restart_unavailable"
+                    << "\n";
 
                 break;
             }
@@ -385,6 +526,15 @@ MolecularOrbital solveMolecularOrbital(
                 );
 
             ++hApplications;
+
+            std::cerr
+                << "[MO-DEBUG] RESTART"
+                << " orbital=" << orbitalIndex
+                << " spin=" << spinName(spin)
+                << " iter=" << davidsonIterations
+                << " H=" << hApplications
+                << " reason=independent"
+                << "\n";
 
             basis.clear();
             hBasis.clear();
@@ -453,6 +603,29 @@ MolecularOrbital solveMolecularOrbital(
             );
 
 
+        const double correctionNormSquared =
+            davidsonNormSquared(
+                correction,
+                dV
+            );
+
+        const double correctionNorm =
+            std::isfinite(correctionNormSquared) &&
+            correctionNormSquared >= 0.0
+                ? std::sqrt(correctionNormSquared)
+                : std::numeric_limits<double>::infinity();
+
+
+        std::cerr
+            << "[MO-DEBUG] PRECONDITION"
+            << " orbital=" << orbitalIndex
+            << " spin=" << spinName(spin)
+            << " iter=" << davidsonIterations
+            << " residual=" << residualNorm
+            << " correctionNorm=" << correctionNorm
+            << "\n";
+
+
         /*
          * La correccion se proyecta una sola vez contra
          * los orbitales anteriores y contra el subespacio
@@ -468,6 +641,19 @@ MolecularOrbital solveMolecularOrbital(
             );
 
 
+        std::cerr
+            << "[MO-DEBUG] CORRECTION"
+            << " orbital=" << orbitalIndex
+            << " spin=" << spinName(spin)
+            << " iter=" << davidsonIterations
+            << " accepted=" << (
+                correctionValid
+                    ? "yes"
+                    : "no"
+            )
+            << "\n";
+
+
         /*
          * Si el precondicionador destruye la direccion,
          * se recupera a partir del residual original.
@@ -477,6 +663,14 @@ MolecularOrbital solveMolecularOrbital(
          * componente numerica contra basis.
          */
         if (!correctionValid) {
+
+            std::cerr
+                << "[MO-DEBUG] FALLBACK"
+                << " orbital=" << orbitalIndex
+                << " spin=" << spinName(spin)
+                << " iter=" << davidsonIterations
+                << " reason=preconditioned_correction_rejected"
+                << "\n";
 
             correction =
                 residual;
@@ -488,6 +682,14 @@ MolecularOrbital solveMolecularOrbital(
                     dV,
                     SUBSPACE_TOLERANCE
                 )) {
+
+                std::cerr
+                    << "[MO-DEBUG] FALLBACK_REJECTED"
+                    << " orbital=" << orbitalIndex
+                    << " spin=" << spinName(spin)
+                    << " iter=" << davidsonIterations
+                    << " reason=raw_residual_rejected"
+                    << "\n";
 
                 /*
                  * El residual puede ser pequeno pero aun
@@ -534,12 +736,30 @@ MolecularOrbital solveMolecularOrbital(
                     SUBSPACE_TOLERANCE *
                     SUBSPACE_TOLERANCE
                 );
+
+                std::cerr
+                    << "[MO-DEBUG] FALLBACK"
+                    << " orbital=" << orbitalIndex
+                    << " spin=" << spinName(spin)
+                    << " iter=" << davidsonIterations
+                    << " reason=deterministic_independent"
+                    << "\n";
             }
         }
 
 
         if (basis.size() <
             MAX_SUBSPACE_DIMENSION) {
+
+            std::cerr
+                << "[MO-DEBUG] EXPAND"
+                << " orbital=" << orbitalIndex
+                << " spin=" << spinName(spin)
+                << " iter=" << davidsonIterations
+                << " oldBasis=" << basis.size()
+                << " newBasis=" << basis.size() + 1
+                << " reason=correction"
+                << "\n";
 
             basis.push_back(
                 std::move(correction)
@@ -551,6 +771,16 @@ MolecularOrbital solveMolecularOrbital(
 
         if (hApplications >=
             maxIterations) {
+
+            std::cerr
+                << "[MO-DEBUG] LIMIT"
+                << " orbital=" << orbitalIndex
+                << " spin=" << spinName(spin)
+                << " iter=" << davidsonIterations
+                << " H=" << hApplications
+                << " basis=" << basis.size()
+                << " reason=maximum_H_applications"
+                << "\n";
 
             break;
         }
@@ -570,6 +800,16 @@ MolecularOrbital solveMolecularOrbital(
             );
 
         ++hApplications;
+
+
+        std::cerr
+            << "[MO-DEBUG] RESTART"
+            << " orbital=" << orbitalIndex
+            << " spin=" << spinName(spin)
+            << " iter=" << davidsonIterations
+            << " H=" << hApplications
+            << " reason=max_subspace"
+            << "\n";
 
 
         basis.clear();
@@ -633,6 +873,18 @@ MolecularOrbital solveMolecularOrbital(
     if (finalVector.empty() ||
         finalResidual >=
             MO_RESIDUAL_TOLERANCE) {
+
+        std::cerr
+            << "[MO-DEBUG] FAIL"
+            << " orbital=" << orbitalIndex
+            << " spin=" << spinName(spin)
+            << " iterations=" << davidsonIterations
+            << " H=" << hApplications
+            << " basis=" << basis.size()
+            << " eigenvalue=" << finalEigenvalue
+            << " residual=" << finalResidual
+            << " tolerance=" << MO_RESIDUAL_TOLERANCE
+            << "\n";
 
         throw std::runtime_error(
             "El orbital molecular no convergio. "
