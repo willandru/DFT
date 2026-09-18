@@ -24,7 +24,7 @@ int main()
         PBE96 pbe96;
 
         // ============================================================
-        // PRIMEROS 15 ATOMOS - PZ81
+        // PRIMEROS 5 ATOMOS - PZ81
         // ============================================================
 
         std::cout
@@ -54,7 +54,7 @@ int main()
         }
 
         // ============================================================
-        // PRIMEROS 15 ATOMOS - PBE96
+        // PRIMEROS 5 ATOMOS - PBE96
         // ============================================================
 
         std::cout
@@ -86,6 +86,8 @@ int main()
 
         // ============================================================
         // MOLECULA H2 - PZ81
+        //
+        // Multiplicidad = 1 (singlete)
         // ============================================================
 
         Molecule h2(0);
@@ -121,6 +123,7 @@ int main()
                 molecularGrid,
                 h2,
                 h2.getCharge(),
+                1,
                 pz81
             );
 
@@ -143,6 +146,7 @@ int main()
         //
         // Carga molecular = 0
         // Electrones = 10
+        // Multiplicidad = 1 (singlete)
         // ============================================================
 
         Molecule h2o(0);
@@ -185,6 +189,7 @@ int main()
                 waterGrid,
                 h2o,
                 h2o.getCharge(),
+                1,
                 pz81
             );
 
@@ -206,6 +211,7 @@ int main()
         //
         // Carga molecular = 0
         // Electrones = 14
+        // Multiplicidad = 1 (singlete)
         // ============================================================
 
         Molecule n2(0);
@@ -241,6 +247,7 @@ int main()
                 n2Grid,
                 n2,
                 n2.getCharge(),
+                1,
                 pz81
             );
 
@@ -266,6 +273,7 @@ int main()
         //
         // Carga molecular = 0
         // Electrones = 22
+        // Multiplicidad = 1 (singlete)
         // ============================================================
 
         Molecule co2(0);
@@ -308,6 +316,7 @@ int main()
                 co2Grid,
                 co2,
                 co2.getCharge(),
+                1,
                 pz81
             );
 
@@ -329,6 +338,12 @@ int main()
         //
         // Carga molecular = 0
         // Electrones = 16
+        // Multiplicidad = 3 (triplete)
+        //
+        // Para el triplete:
+        //
+        // N_alpha = 9
+        // N_beta  = 7
         // ============================================================
 
         Molecule o2(0);
@@ -364,6 +379,7 @@ int main()
                 o2Grid,
                 o2,
                 o2.getCharge(),
+                3,
                 pz81
             );
 

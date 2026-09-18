@@ -102,6 +102,7 @@ MolecularResult solveMolecularSelfConsistentField(
     const CartesianGrid& grid,
     const Molecule& molecule,
     int charge,
+    int multiplicity,
     const XCFunctional& functional
 )
 {
@@ -124,6 +125,13 @@ MolecularResult solveMolecularSelfConsistentField(
 
         throw std::invalid_argument(
             "La molecula debe contener al menos un nucleo."
+        );
+    }
+
+    if (multiplicity < 1) {
+
+        throw std::invalid_argument(
+            "La multiplicidad de espin debe ser un entero positivo."
         );
     }
 
@@ -169,16 +177,65 @@ MolecularResult solveMolecularSelfConsistentField(
     /*
      * ================================================================
      * 3. PARTICION DE ESPIN
+     *
+     * La multiplicidad satisface:
+     *
+     *     M = 2S + 1
+     *
+     * por lo tanto:
+     *
+     *     2S = M - 1
+     *
+     * y la particion electronica es:
+     *
+     *     N_alpha = (N + 2S) / 2
+     *     N_beta  = (N - 2S) / 2
+     *
+     * equivalentemente:
+     *
+     *     N_alpha = (N + M - 1) / 2
+     *     N_beta  = (N - M + 1) / 2
      * ================================================================
      */
 
+    const int spinDifference =
+        multiplicity - 1;
+
+    if (spinDifference > electronCount) {
+
+        throw std::invalid_argument(
+            "La multiplicidad de espin es incompatible con el numero de electrones."
+        );
+    }
+
+    /*
+     * N + M - 1 debe ser par para que N_alpha y N_beta
+     * sean enteros.
+     */
+    if ((electronCount + multiplicity - 1) % 2 != 0) {
+
+        throw std::invalid_argument(
+            "La multiplicidad de espin no es compatible con el numero de electrones."
+        );
+    }
+
     const int alphaElectrons =
-        (electronCount + 1) / 2;
+        (electronCount + spinDifference) / 2;
 
     const int betaElectrons =
-        electronCount / 2;
+        (electronCount - spinDifference) / 2;
+
+    if (alphaElectrons < 0 ||
+        betaElectrons < 0 ||
+        alphaElectrons + betaElectrons != electronCount) {
+
+        throw std::invalid_argument(
+            "La particion de electrones Alpha/Beta es invalida."
+        );
+    }
 
     const bool closedShell =
+        multiplicity == 1 &&
         alphaElectrons == betaElectrons;
 
     /*

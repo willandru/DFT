@@ -9,5 +9,6 @@ MolecularResult solveMolecularSelfConsistentField(
     const CartesianGrid& grid,
     const Molecule& molecule,
     int charge,
+    int multiplicity,
     const XCFunctional& functional
 );

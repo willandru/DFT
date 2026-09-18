@@ -120,13 +120,10 @@ double dot(
          i < gridSize;
          ++i)
     {
-        result +=
-            a[i] *
-            b[i];
+        result += a[i] * b[i];
     }
 
-    return result *
-           volumeElement;
+    return result * volumeElement;
 }
 
 double norm(
@@ -194,9 +191,7 @@ void axpy(
          i < gridSize;
          ++i)
     {
-        destination[i] +=
-            factor *
-            source[i];
+        destination[i] += factor * source[i];
     }
 }
 
@@ -269,9 +264,6 @@ bool orthogonalizeAndNormalize(
         volumeElement
     );
 
-    /*
-     * Second Gram-Schmidt pass for numerical stability.
-     */
     orthogonalizeOnce(
         vector,
         basis,
@@ -292,8 +284,7 @@ std::vector<double> linearCombination(
     std::size_t gridSize
 )
 {
-    if (basis.size() !=
-        coefficients.size())
+    if (basis.size() != coefficients.size())
     {
         throw std::invalid_argument(
             "La base y los coeficientes tienen diferentes dimensiones."
@@ -309,6 +300,14 @@ std::vector<double> linearCombination(
          j < basis.size();
          ++j)
     {
+        const double coefficient =
+            coefficients[j];
+
+        if (coefficient == 0.0)
+        {
+            continue;
+        }
+
         validateVectorSize(
             basis[j],
             gridSize,
@@ -320,7 +319,7 @@ std::vector<double> linearCombination(
              ++i)
         {
             result[i] +=
-                coefficients[j] *
+                coefficient *
                 basis[j][i];
         }
     }
@@ -375,17 +374,14 @@ void jacobiDiagonalize(
     const std::size_t maximumSweeps =
         std::max(
             std::size_t(50),
-            10 *
-            dimension *
-            dimension
+            10 * dimension * dimension
         );
 
     for (std::size_t sweep = 0;
          sweep < maximumSweeps;
          ++sweep)
     {
-        double maximumOffDiagonal =
-            0.0;
+        double maximumOffDiagonal = 0.0;
 
         std::size_t p = 0;
         std::size_t q = 0;
@@ -399,39 +395,27 @@ void jacobiDiagonalize(
                  ++j)
             {
                 const double value =
-                    std::abs(
-                        matrix[i][j]
-                    );
+                    std::abs(matrix[i][j]);
 
-                if (value >
-                    maximumOffDiagonal)
+                if (value > maximumOffDiagonal)
                 {
-                    maximumOffDiagonal =
-                        value;
-
+                    maximumOffDiagonal = value;
                     p = i;
                     q = j;
                 }
             }
         }
 
-        if (maximumOffDiagonal <=
-            JACOBI_TOLERANCE)
+        if (maximumOffDiagonal <= JACOBI_TOLERANCE)
         {
             break;
         }
 
-        const double app =
-            matrix[p][p];
+        const double app = matrix[p][p];
+        const double aqq = matrix[q][q];
+        const double apq = matrix[p][q];
 
-        const double aqq =
-            matrix[q][q];
-
-        const double apq =
-            matrix[p][q];
-
-        if (std::abs(apq) <=
-            JACOBI_TOLERANCE)
+        if (std::abs(apq) <= JACOBI_TOLERANCE)
         {
             continue;
         }
@@ -450,16 +434,14 @@ void jacobiDiagonalize(
             (
                 std::abs(tau) +
                 std::sqrt(
-                    1.0 +
-                    tau * tau
+                    1.0 + tau * tau
                 )
             );
 
         const double c =
             1.0 /
             std::sqrt(
-                1.0 +
-                t * t
+                1.0 + t * t
             );
 
         const double s =
@@ -469,17 +451,13 @@ void jacobiDiagonalize(
              k < dimension;
              ++k)
         {
-            if (k == p ||
-                k == q)
+            if (k == p || k == q)
             {
                 continue;
             }
 
-            const double akp =
-                matrix[k][p];
-
-            const double akq =
-                matrix[k][q];
+            const double akp = matrix[k][p];
+            const double akq = matrix[k][q];
 
             const double newKp =
                 c * akp -
@@ -489,17 +467,11 @@ void jacobiDiagonalize(
                 s * akp +
                 c * akq;
 
-            matrix[k][p] =
-                newKp;
+            matrix[k][p] = newKp;
+            matrix[p][k] = newKp;
 
-            matrix[p][k] =
-                newKp;
-
-            matrix[k][q] =
-                newKq;
-
-            matrix[q][k] =
-                newKq;
+            matrix[k][q] = newKq;
+            matrix[q][k] = newKq;
         }
 
         matrix[p][p] =
@@ -535,16 +507,13 @@ void jacobiDiagonalize(
         }
     }
 
-    eigenvalues.resize(
-        dimension
-    );
+    eigenvalues.resize(dimension);
 
     for (std::size_t i = 0;
          i < dimension;
          ++i)
     {
-        eigenvalues[i] =
-            matrix[i][i];
+        eigenvalues[i] = matrix[i][i];
     }
 
     std::vector<std::size_t> order(
@@ -611,53 +580,51 @@ void jacobiDiagonalize(
         );
 }
 
-std::vector<std::vector<double>> applyHamiltonianToBasis(
+std::vector<double> applyHamiltonian(
     const CartesianGrid& grid,
     const std::vector<double>& effectivePotential,
-    const std::vector<std::vector<double>>& basis,
+    const std::vector<double>& vector,
     std::size_t gridSize
 )
 {
-    std::vector<std::vector<double>> hBasis;
-
-    hBasis.reserve(
-        basis.size()
+    validateVectorSize(
+        vector,
+        gridSize,
+        "Un vector de la base no tiene el mismo tamano que la malla."
     );
 
-    for (const std::vector<double>& vector :
-         basis)
-    {
-        validateVectorSize(
+    std::vector<double> hVector =
+        applyMolecularKohnShamHamiltonian(
+            grid,
+            effectivePotential,
+            vector
+        );
+
+    validateVectorSize(
+        hVector,
+        gridSize,
+        "El Hamiltoniano produjo un vector con tamano incorrecto."
+    );
+
+    return hVector;
+}
+
+void appendHamiltonianVector(
+    const CartesianGrid& grid,
+    const std::vector<double>& effectivePotential,
+    const std::vector<double>& vector,
+    std::vector<std::vector<double>>& hBasis,
+    std::size_t gridSize
+)
+{
+    hBasis.push_back(
+        applyHamiltonian(
+            grid,
+            effectivePotential,
             vector,
-            gridSize,
-            "Un vector de la base no tiene el mismo tamano que la malla."
-        );
-
-        std::vector<double> hVector =
-            applyMolecularKohnShamHamiltonian(
-                grid,
-                effectivePotential,
-                vector
-            );
-
-        validateVectorSize(
-            hVector,
-            gridSize,
-            "El Hamiltoniano produjo un vector con tamano incorrecto."
-        );
-
-        hBasis.push_back(
-            std::move(hVector)
-        );
-    }
-
-    validateBasisConsistency(
-        basis,
-        hBasis,
-        gridSize
+            gridSize
+        )
     );
-
-    return hBasis;
 }
 
 std::vector<std::vector<double>> buildProjectedMatrix(
@@ -700,11 +667,8 @@ std::vector<std::vector<double>> buildProjectedMatrix(
                     volumeElement
                 );
 
-            matrix[i][j] =
-                value;
-
-            matrix[j][i] =
-                value;
+            matrix[i][j] = value;
+            matrix[j][i] = value;
         }
     }
 
@@ -758,9 +722,7 @@ std::vector<RitzState> calculateRitzStates(
 
     std::vector<RitzState> states;
 
-    states.reserve(
-        stateCount
-    );
+    states.reserve(stateCount);
 
     for (std::size_t state = 0;
          state < stateCount;
@@ -878,6 +840,13 @@ std::vector<double> buildPreconditionedResidual(
     const double dz =
         grid.getDz();
 
+    /*
+     * Diagonal del operador cinetico:
+     *
+     * -1/2 nabla^2
+     *
+     * usando diferencias centrales.
+     */
     const double diagonalKinetic =
         1.0 / (dx * dx) +
         1.0 / (dy * dy) +
@@ -904,12 +873,8 @@ std::vector<double> buildPreconditionedResidual(
             std::max(
                 {
                     1.0,
-                    std::abs(
-                        state.eigenvalue
-                    ),
-                    std::abs(
-                        diagonal
-                    )
+                    std::abs(state.eigenvalue),
+                    std::abs(diagonal)
                 }
             );
 
@@ -937,7 +902,7 @@ std::vector<double> buildPreconditionedResidual(
 bool addIndependentVector(
     std::vector<std::vector<double>>& target,
     std::vector<double> vector,
-    const std::vector<std::vector<double>>& against,
+    const std::vector<std::vector<double>>& basis,
     std::size_t gridSize,
     double volumeElement
 )
@@ -948,25 +913,12 @@ bool addIndependentVector(
         "El vector candidato no tiene el mismo tamano que la malla."
     );
 
-    orthogonalizeOnce(
-        vector,
-        against,
-        gridSize,
-        volumeElement
-    );
-
     /*
-     * Second pass against the same accepted set.
+     * Orthogonalize against the complete accepted subspace.
      */
-    orthogonalizeOnce(
-        vector,
-        against,
-        gridSize,
-        volumeElement
-    );
-
-    if (!normalize(
+    if (!orthogonalizeAndNormalize(
             vector,
+            basis,
             gridSize,
             volumeElement))
     {
@@ -985,8 +937,7 @@ bool allConverged(
     std::size_t numberOfOrbitals
 )
 {
-    if (states.size() <
-        numberOfOrbitals)
+    if (states.size() < numberOfOrbitals)
     {
         return false;
     }
@@ -1011,6 +962,48 @@ bool allConverged(
     return true;
 }
 
+void appendNewBasisVectors(
+    const CartesianGrid& grid,
+    const std::vector<double>& effectivePotential,
+    std::vector<std::vector<double>>& basis,
+    std::vector<std::vector<double>>& hBasis,
+    const std::vector<std::vector<double>>& newVectors,
+    std::size_t gridSize
+)
+{
+    for (const std::vector<double>& vector :
+         newVectors)
+    {
+        validateVectorSize(
+            vector,
+            gridSize,
+            "Un nuevo vector de la base tiene tamano incorrecto."
+        );
+
+        basis.push_back(vector);
+
+        /*
+         * IMPORTANT:
+         *
+         * Only the new vector is transformed by H.
+         * Existing H*basis vectors are reused.
+         */
+        appendHamiltonianVector(
+            grid,
+            effectivePotential,
+            basis.back(),
+            hBasis,
+            gridSize
+        );
+    }
+
+    validateBasisConsistency(
+        basis,
+        hBasis,
+        gridSize
+    );
+}
+
 void rebuildSubspace(
     const CartesianGrid& grid,
     const std::vector<double>& effectivePotential,
@@ -1019,19 +1012,23 @@ void rebuildSubspace(
     std::size_t gridSize
 )
 {
-    /*
-     * This function deliberately reconstructs hBasis from basis.
-     *
-     * basis and hBasis are therefore never maintained independently
-     * across a restart.
-     */
-    hBasis =
-        applyHamiltonianToBasis(
+    hBasis.clear();
+
+    hBasis.reserve(
+        basis.size()
+    );
+
+    for (const std::vector<double>& vector :
+         basis)
+    {
+        appendHamiltonianVector(
             grid,
             effectivePotential,
-            basis,
+            vector,
+            hBasis,
             gridSize
         );
+    }
 
     validateBasisConsistency(
         basis,
@@ -1062,8 +1059,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
         );
     }
 
-    if (effectivePotential.size() !=
-        gridSize)
+    if (effectivePotential.size() != gridSize)
     {
         throw std::invalid_argument(
             "El potencial efectivo y la malla deben tener el mismo tamano."
@@ -1075,8 +1071,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
         return {};
     }
 
-    if (occupations.size() <
-        numberOfOrbitals)
+    if (occupations.size() < numberOfOrbitals)
     {
         throw std::invalid_argument(
             "La lista de ocupaciones no contiene suficientes orbitales."
@@ -1091,9 +1086,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
     }
 
     const double volumeElement =
-        getVolumeElement(
-            grid
-        );
+        getVolumeElement(grid);
 
     /*
      * ---------------------------------------------------------------
@@ -1108,25 +1101,23 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
     );
 
     /*
-     * Previous SCF orbitals are preferred.
+     * Reuse orbitals from the previous SCF iteration whenever
+     * possible.
      */
     for (const MolecularOrbital& orbital :
          initialOrbitals)
     {
-        if (basis.size() >=
-            numberOfOrbitals)
+        if (basis.size() >= numberOfOrbitals)
         {
             break;
         }
 
-        if (orbital.spin !=
-            spin)
+        if (orbital.spin != spin)
         {
             continue;
         }
 
-        if (orbital.psi.size() !=
-            gridSize)
+        if (orbital.psi.size() != gridSize)
         {
             continue;
         }
@@ -1151,15 +1142,14 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
      */
     std::size_t seedIndex = 0;
 
-    while (basis.size() <
-           numberOfOrbitals)
+    while (basis.size() < numberOfOrbitals)
     {
         std::vector<double> seed(
             gridSize,
             0.0
         );
 
-        const double pi =
+        constexpr double pi =
             3.1415926535897932384626433832795;
 
         const double frequency =
@@ -1194,9 +1184,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
                     denominator;
 
                 const double envelope =
-                    std::sin(
-                        pi * x
-                    );
+                    std::sin(pi * x);
 
                 seed[i] =
                     envelope *
@@ -1232,8 +1220,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
                 gridSize,
                 volumeElement))
         {
-            if (seedIndex >
-                100000)
+            if (seedIndex > 100000)
             {
                 throw std::runtime_error(
                     "No fue posible construir un subespacio inicial "
@@ -1250,7 +1237,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
     }
 
     /*
-     * hBasis is created exclusively from basis.
+     * Initial Hamiltonian images.
      */
     std::vector<std::vector<double>> hBasis;
 
@@ -1271,12 +1258,11 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
 
     std::vector<RitzState> states;
 
-    bool converged =
-        false;
+    bool converged = false;
 
     /*
      * ---------------------------------------------------------------
-     * Block-Davidson iterations
+     * Block-Davidson
      * ---------------------------------------------------------------
      */
     for (std::size_t iteration = 0;
@@ -1302,9 +1288,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
                 states,
                 numberOfOrbitals))
         {
-            converged =
-                true;
-
+            converged = true;
             break;
         }
 
@@ -1319,6 +1303,12 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
             numberOfOrbitals
         );
 
+        /*
+         * We do not create a copy of "basis" for every state.
+         *
+         * Each correction is orthogonalized first against the current
+         * basis and then against previously accepted corrections.
+         */
         for (std::size_t state = 0;
              state < numberOfOrbitals;
              ++state)
@@ -1336,50 +1326,41 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
                     grid
                 );
 
-            std::vector<std::vector<double>> against =
-                basis;
-
-            for (const auto& accepted :
-                 correctionBlock)
-            {
-                against.push_back(
-                    accepted
-                );
-            }
-
-            if (!addIndependentVector(
-                    correctionBlock,
-                    std::move(correction),
-                    against,
+            if (!orthogonalizeAndNormalize(
+                    correction,
+                    basis,
                     gridSize,
                     volumeElement))
             {
-                /*
-                 * The preconditioner produced a dependent direction.
-                 * Use the physical residual itself.
-                 */
-                std::vector<double> residual =
+                correction =
                     states[state].residual;
 
-                against =
-                    basis;
-
-                for (const auto& accepted :
-                     correctionBlock)
+                if (!orthogonalizeAndNormalize(
+                        correction,
+                        basis,
+                        gridSize,
+                        volumeElement))
                 {
-                    against.push_back(
-                        accepted
-                    );
+                    continue;
                 }
-
-                addIndependentVector(
-                    correctionBlock,
-                    std::move(residual),
-                    against,
-                    gridSize,
-                    volumeElement
-                );
             }
+
+            /*
+             * Orthogonalize against corrections already accepted
+             * in this block.
+             */
+            if (!orthogonalizeAndNormalize(
+                    correction,
+                    correctionBlock,
+                    gridSize,
+                    volumeElement))
+            {
+                continue;
+            }
+
+            correctionBlock.push_back(
+                std::move(correction)
+            );
         }
 
         if (correctionBlock.empty())
@@ -1389,7 +1370,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
 
         /*
          * -----------------------------------------------------------
-         * If there is enough room, expand normally.
+         * Expand without recomputing old H*basis.
          * -----------------------------------------------------------
          */
         const std::size_t availableSpace =
@@ -1407,22 +1388,32 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
                     correctionBlock.size()
                 );
 
+            std::vector<std::vector<double>> vectorsToAdd;
+
+            vectorsToAdd.reserve(
+                numberToAdd
+            );
+
             for (std::size_t i = 0;
                  i < numberToAdd;
                  ++i)
             {
-                basis.push_back(
+                vectorsToAdd.push_back(
                     std::move(
                         correctionBlock[i]
                     )
                 );
             }
 
-            rebuildSubspace(
+            /*
+             * Only the newly generated vectors are passed through H.
+             */
+            appendNewBasisVectors(
                 grid,
                 effectivePotential,
                 basis,
                 hBasis,
+                vectorsToAdd,
                 gridSize
             );
 
@@ -1431,16 +1422,16 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
 
         /*
          * -----------------------------------------------------------
-         * Restart.
+         * Restart
+         * -----------------------------------------------------------
          *
          * Keep:
          *
-         *   - requested Ritz vectors;
-         *   - independent correction directions.
+         *   1. current Ritz vectors;
+         *   2. current correction directions.
          *
-         * IMPORTANT:
-         * hBasis is NOT copied or partially modified here.
-         * It is rebuilt completely from the new basis.
+         * Since the basis itself changes completely, H must be
+         * recomputed for the new basis. This is unavoidable at restart.
          * -----------------------------------------------------------
          */
         std::vector<std::vector<double>> restartedBasis;
@@ -1496,12 +1487,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
             );
         }
 
-        /*
-         * The restart must preserve at least the requested number of
-         * linearly independent states.
-         */
-        if (restartedBasis.size() <
-            numberOfOrbitals)
+        if (restartedBasis.size() < numberOfOrbitals)
         {
             throw std::runtime_error(
                 "El restart de Block-Davidson no pudo conservar "
@@ -1514,11 +1500,6 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
                 restartedBasis
             );
 
-        /*
-         * This is the critical consistency operation:
-         *
-         * basis and hBasis are reconstructed together.
-         */
         rebuildSubspace(
             grid,
             effectivePotential,
@@ -1530,7 +1511,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
 
     /*
      * ---------------------------------------------------------------
-     * Final Ritz extraction.
+     * Final Ritz extraction
      * ---------------------------------------------------------------
      */
     validateBasisConsistency(
@@ -1559,7 +1540,7 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
 
     /*
      * ---------------------------------------------------------------
-     * Final physical orthonormalization.
+     * Final physical orthonormalization
      * ---------------------------------------------------------------
      */
     std::vector<MolecularOrbital> orbitals;
@@ -1598,18 +1579,12 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
         );
 
         const std::vector<double> hPsi =
-            applyMolecularKohnShamHamiltonian(
+            applyHamiltonian(
                 grid,
                 effectivePotential,
-                psi
+                psi,
+                gridSize
             );
-
-        validateVectorSize(
-            hPsi,
-            gridSize,
-            "El Hamiltoniano produjo un orbital final "
-            "con tamano incorrecto."
-        );
 
         const double eigenvalue =
             dot(
@@ -1619,18 +1594,13 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
                 volumeElement
             );
 
-        if (!std::isfinite(
-                eigenvalue))
+        if (!std::isfinite(eigenvalue))
         {
             throw std::runtime_error(
                 "El autovalor molecular obtenido no es finito."
             );
         }
 
-        /*
-         * Verify the final physical residual after the final
-         * orthonormalization.
-         */
         std::vector<double> residual =
             hPsi;
 
@@ -1648,10 +1618,8 @@ std::vector<MolecularOrbital> solveMolecularOrbitalsBlockDavidson(
                 volumeElement
             );
 
-        if (!std::isfinite(
-                residualNorm) ||
-            residualNorm >
-                RESIDUAL_TOLERANCE)
+        if (!std::isfinite(residualNorm) ||
+            residualNorm > RESIDUAL_TOLERANCE)
         {
             throw std::runtime_error(
                 "El orbital molecular final no satisface "
