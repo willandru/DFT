@@ -3,15 +3,18 @@
 #include "DFTConstants.h"
 #include "EigenvalueSolverMolecule.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 
-namespace MolecularSCFHelper {
+namespace MolecularSCFHelper
+{
 
-namespace {
+namespace
+{
 
 constexpr std::size_t timingIndex(
     TimingStage stage
@@ -59,7 +62,8 @@ void Timer::start()
 
 double Timer::stop()
 {
-    if (!scfRunning_) {
+    if (!scfRunning_)
+    {
         return 0.0;
     }
 
@@ -99,11 +103,13 @@ void Timer::end(
     TimingStage stage
 )
 {
-    if (!stageRunning_) {
+    if (!stageRunning_)
+    {
         return;
     }
 
-    if (stage != currentStage_) {
+    if (stage != currentStage_)
+    {
         throw std::logic_error(
             "El estado de timing no coincide con el estado iniciado."
         );
@@ -139,7 +145,19 @@ double Timer::getMeasuredTime() const
 {
     return
         get(TimingStage::Initialization) +
-        get(TimingStage::TotalIterations);
+        get(TimingStage::Density) +
+        get(TimingStage::Hartree) +
+        get(TimingStage::ExchangeCorrelationAlpha) +
+        get(TimingStage::ExchangeCorrelationBeta) +
+        get(TimingStage::PotentialConstruction) +
+        get(TimingStage::OrbitalAlpha) +
+        get(TimingStage::OrbitalBeta) +
+        get(TimingStage::OutputDensity) +
+        get(TimingStage::OutputHartree) +
+        get(TimingStage::TotalEnergy) +
+        get(TimingStage::DensityDifference) +
+        get(TimingStage::KSResidual) +
+        get(TimingStage::Mixing);
 }
 
 double Timer::getSCFTotalTime() const
@@ -173,8 +191,8 @@ solveMolecularOrbitalsSilently(
             suppressedOutput.rdbuf()
         );
 
-    try {
-
+    try
+    {
         const std::vector<MolecularOrbital> orbitals =
             solveMolecularOrbitals(
                 grid,
@@ -191,8 +209,8 @@ solveMolecularOrbitalsSilently(
 
         return orbitals;
     }
-    catch (...) {
-
+    catch (...)
+    {
         std::cout.rdbuf(
             originalBuffer
         );
@@ -239,16 +257,16 @@ void printSCFIteration(
         << energy
         << " | ";
 
-    if (std::isfinite(energyDifference)) {
-
+    if (std::isfinite(energyDifference))
+    {
         std::cout
             << std::scientific
             << std::setprecision(4)
             << std::setw(10)
             << energyDifference;
     }
-    else {
-
+    else
+    {
         std::cout
             << std::setw(10)
             << "inf";
@@ -272,16 +290,16 @@ void printSCFIteration(
         << mixing
         << " | ";
 
-    if (!alphaOrbitals.empty()) {
-
+    if (!alphaOrbitals.empty())
+    {
         std::cout
             << std::scientific
             << std::setprecision(6)
             << std::setw(12)
             << alphaOrbitals.front().eigenvalue;
     }
-    else {
-
+    else
+    {
         std::cout
             << std::setw(12)
             << "N/A";
@@ -290,16 +308,16 @@ void printSCFIteration(
     std::cout
         << " | ";
 
-    if (!betaOrbitals.empty()) {
-
+    if (!betaOrbitals.empty())
+    {
         std::cout
             << std::scientific
             << std::setprecision(6)
             << std::setw(12)
             << betaOrbitals.front().eigenvalue;
     }
-    else {
-
+    else
+    {
         std::cout
             << std::setw(12)
             << "N/A";
