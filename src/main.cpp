@@ -24,64 +24,65 @@ int main()
         PBE96 pbe96;
 
         // ============================================================
-        // ATOMO DE HIDROGENO - PZ81
+        // PRIMEROS 15 ATOMOS - PZ81
         // ============================================================
-
-        const AtomicConfiguration hydrogen =
-            getAtomicConfiguration(1);
-
-        const AtomicResult hPZ81 =
-            solveAtom(
-                grid,
-                hydrogen,
-                pz81
-            );
 
         std::cout
-            << "H | PZ81  | E = "
-            << std::scientific
-            << std::setprecision(10)
-            << hPZ81.scf.energy.total
-            << " Ha\n";
+            << "============================================================\n"
+            << "PRIMEROS 15 ATOMOS - PZ81\n"
+            << "============================================================\n";
+
+        for (int Z = 1; Z <= 15; ++Z)
+        {
+            const AtomicConfiguration configuration =
+                getAtomicConfiguration(Z);
+
+            const AtomicResult result =
+                solveAtom(
+                    grid,
+                    configuration,
+                    pz81
+                );
+
+            std::cout
+                << configuration.symbol
+                << " | PZ81 | E = "
+                << std::scientific
+                << std::setprecision(10)
+                << result.scf.energy.total
+                << " Ha\n";
+        }
 
         // ============================================================
-        // ATOMO DE HIDROGENO - PBE96
+        // PRIMEROS 15 ATOMOS - PBE96
         // ============================================================
-
-        const AtomicResult hPBE96 =
-            solveAtom(
-                grid,
-                hydrogen,
-                pbe96
-            );
 
         std::cout
-            << "H | PBE96 | E = "
-            << std::scientific
-            << std::setprecision(10)
-            << hPBE96.scf.energy.total
-            << " Ha\n";
+            << "\n"
+            << "============================================================\n"
+            << "PRIMEROS 15 ATOMOS - PBE96\n"
+            << "============================================================\n";
 
-        // ============================================================
-        // ATOMO DE OXIGENO - PZ81
-        // ============================================================
+        for (int Z = 1; Z <= 15; ++Z)
+        {
+            const AtomicConfiguration configuration =
+                getAtomicConfiguration(Z);
 
-        const AtomicConfiguration oxygen =
-            getAtomicConfiguration(8);
+            const AtomicResult result =
+                solveAtom(
+                    grid,
+                    configuration,
+                    pbe96
+                );
 
-        const AtomicResult oPZ81 =
-            solveAtom(
-                grid,
-                oxygen,
-                pz81
-            );
-
-        std::cout
-            << "O | PZ81  | E = "
-            << std::scientific
-            << std::setprecision(10)
-            << oPZ81.scf.energy.total
-            << " Ha\n";
+            std::cout
+                << configuration.symbol
+                << " | PBE96 | E = "
+                << std::scientific
+                << std::setprecision(10)
+                << result.scf.energy.total
+                << " Ha\n";
+        }
 
         // ============================================================
         // MOLECULA H2 - PZ81
@@ -196,6 +197,62 @@ int main()
             << " Ha\n";
 
         // ============================================================
+        // MOLECULA N2 - PZ81
+        //
+        // Geometria lineal aproximada:
+        //
+        // N1 = (-1.037, 0.000, 0.000) bohr
+        // N2 = ( 1.037, 0.000, 0.000) bohr
+        //
+        // Carga molecular = 0
+        // Electrones = 14
+        // ============================================================
+
+        Molecule n2(0);
+
+        n2.addNucleus(
+            7,
+            -1.037,
+            0.0,
+            0.0
+        );
+
+        n2.addNucleus(
+            7,
+            1.037,
+            0.0,
+            0.0
+        );
+
+        CartesianGrid n2Grid(
+            15,
+            15,
+            15,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9
+        );
+
+        const MolecularResult n2PZ81 =
+            solveMolecularSelfConsistentField(
+                n2Grid,
+                n2,
+                n2.getCharge(),
+                pz81
+            );
+
+        std::cout
+            << "\n"
+            << "N2 | PZ81 | E = "
+            << std::scientific
+            << std::setprecision(10)
+            << n2PZ81.scf.energy.total
+            << " Ha\n";
+
+        // ============================================================
         // MOLECULA CO2 - PZ81
         //
         // Geometria lineal aproximada:
@@ -260,6 +317,62 @@ int main()
             << std::scientific
             << std::setprecision(10)
             << co2PZ81.scf.energy.total
+            << " Ha\n";
+
+        // ============================================================
+        // MOLECULA O2 - PZ81
+        //
+        // Geometria lineal aproximada:
+        //
+        // O1 = (-1.141, 0.000, 0.000) bohr
+        // O2 = ( 1.141, 0.000, 0.000) bohr
+        //
+        // Carga molecular = 0
+        // Electrones = 16
+        // ============================================================
+
+        Molecule o2(0);
+
+        o2.addNucleus(
+            8,
+            -1.141,
+            0.0,
+            0.0
+        );
+
+        o2.addNucleus(
+            8,
+            1.141,
+            0.0,
+            0.0
+        );
+
+        CartesianGrid o2Grid(
+            15,
+            15,
+            15,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9
+        );
+
+        const MolecularResult o2PZ81 =
+            solveMolecularSelfConsistentField(
+                o2Grid,
+                o2,
+                o2.getCharge(),
+                pz81
+            );
+
+        std::cout
+            << "\n"
+            << "O2 | PZ81 | E = "
+            << std::scientific
+            << std::setprecision(10)
+            << o2PZ81.scf.energy.total
             << " Ha\n";
 
         return 0;

@@ -1,8 +1,8 @@
 #include "EigenvalueSolverMolecule.h"
 
+#include "DavidsonMath.h"
 #include "DFTConstants.h"
 #include "KohnShamHamiltonianMolecule.h"
-#include "NumericalMethods.h"
 
 #include <cmath>
 #include <iostream>
@@ -18,94 +18,7 @@ constexpr double MO_RESIDUAL_TOLERANCE = 1.0e-7;
 constexpr double SUBSPACE_TOLERANCE = 1.0e-12;
 constexpr double VECTOR_TOLERANCE_SQUARED = 1.0e-20;
 constexpr std::size_t MAX_SUBSPACE_DIMENSION = 16;
-constexpr double DENSE_EIGENVALUE_TOLERANCE = 1.0e-13;
-constexpr std::size_t DENSE_EIGENVALUE_MAX_ITERATIONS = 10000;
 constexpr double DAVIDSON_DENOMINATOR_TOLERANCE = 1.0e-10;
-
-
-double dot(
-    const std::vector<double>& a,
-    const std::vector<double>& b,
-    double dV
-) {
-    if (a.size() != b.size()) {
-        throw std::invalid_argument(
-            "Los vectores deben tener el mismo tamano."
-        );
-    }
-
-    return dV * dotProduct(a, b);
-}
-
-
-double normSquared(
-    const std::vector<double>& v,
-    double dV
-) {
-    return dot(v, v, dV);
-}
-
-
-bool validNorm(
-    const std::vector<double>& v,
-    double dV,
-    double toleranceSquared = VECTOR_TOLERANCE_SQUARED
-) {
-    const double n2 =
-        normSquared(v, dV);
-
-    return std::isfinite(n2) &&
-           n2 > toleranceSquared;
-}
-
-
-void normalize(
-    std::vector<double>& v,
-    double dV,
-    double toleranceSquared = VECTOR_TOLERANCE_SQUARED
-) {
-    const double n2 =
-        normSquared(v, dV);
-
-    if (!std::isfinite(n2) ||
-        n2 <= toleranceSquared) {
-
-        throw std::runtime_error(
-            "No se puede normalizar el vector molecular."
-        );
-    }
-
-    const double n =
-        std::sqrt(n2);
-
-    for (double& value : v) {
-        value /= n;
-    }
-}
-
-
-void orthogonalize(
-    std::vector<double>& v,
-    const std::vector<std::vector<double>>& basis,
-    double dV
-) {
-    for (int pass = 0; pass < 2; ++pass) {
-
-        for (const auto& b : basis) {
-
-            const double projection =
-                dot(b, v, dV);
-
-            for (std::size_t i = 0;
-                 i < v.size();
-                 ++i) {
-
-                v[i] -=
-                    projection * b[i];
-            }
-        }
-    }
-}
 
 
 void orthogonalizeAgainstOrbitals(
@@ -118,7 +31,7 @@ void orthogonalizeAgainstOrbitals(
         for (const auto& orbital : orbitals) {
 
             const double orbitalNorm =
-                normSquared(
+                davidsonNormSquared(
                     orbital.psi,
                     dV
                 );
@@ -133,7 +46,7 @@ void orthogonalizeAgainstOrbitals(
             }
 
             const double projection =
-                dot(
+                davidsonDot(
                     orbital.psi,
                     v,
                     dV
@@ -149,58 +62,6 @@ void orthogonalizeAgainstOrbitals(
             }
         }
     }
-}
-
-
-double rayleigh(
-    const std::vector<double>& psi,
-    const std::vector<double>& hPsi,
-    double dV
-) {
-    const double denominator =
-        normSquared(psi, dV);
-
-    if (!std::isfinite(denominator) ||
-        denominator <= VECTOR_TOLERANCE_SQUARED) {
-
-        throw std::runtime_error(
-            "Norma invalida en el cociente de Rayleigh."
-        );
-    }
-
-    return dot(psi, hPsi, dV) /
-           denominator;
-}
-
-
-double residualNorm(
-    const std::vector<double>& psi,
-    const std::vector<double>& hPsi,
-    double eigenvalue,
-    double dV
-) {
-    std::vector<double> residual(
-        psi.size(),
-        0.0
-    );
-
-    for (std::size_t i = 0;
-         i < psi.size();
-         ++i) {
-
-        residual[i] =
-            hPsi[i] -
-            eigenvalue * psi[i];
-    }
-
-    const double n2 =
-        normSquared(residual, dV);
-
-    if (!std::isfinite(n2)) {
-        return std::numeric_limits<double>::infinity();
-    }
-
-    return std::sqrt(n2);
 }
 
 
@@ -336,258 +197,6 @@ std::vector<double> buildInitialVector(
 }
 
 
-struct Eigenpair {
-    double value;
-    std::vector<double> vector;
-};
-
-
-Eigenpair diagonalize(
-    std::vector<std::vector<double>> matrix
-) {
-    const std::size_t n =
-        matrix.size();
-
-    if (n == 0) {
-        throw std::invalid_argument(
-            "La matriz no puede estar vacia."
-        );
-    }
-
-    std::vector<std::vector<double>> vectors(
-        n,
-        std::vector<double>(n, 0.0)
-    );
-
-    for (std::size_t i = 0;
-         i < n;
-         ++i) {
-
-        vectors[i][i] = 1.0;
-    }
-
-    for (std::size_t iteration = 0;
-         iteration < DENSE_EIGENVALUE_MAX_ITERATIONS;
-         ++iteration) {
-
-        double maximum = 0.0;
-        std::size_t p = 0;
-        std::size_t q = 0;
-
-        for (std::size_t i = 0;
-             i < n;
-             ++i) {
-
-            for (std::size_t j = i + 1;
-                 j < n;
-                 ++j) {
-
-                const double value =
-                    std::abs(matrix[i][j]);
-
-                if (value > maximum) {
-                    maximum = value;
-                    p = i;
-                    q = j;
-                }
-            }
-        }
-
-        if (maximum <=
-            DENSE_EIGENVALUE_TOLERANCE) {
-
-            break;
-        }
-
-        const double app =
-            matrix[p][p];
-
-        const double aqq =
-            matrix[q][q];
-
-        const double apq =
-            matrix[p][q];
-
-        if (apq == 0.0) {
-            continue;
-        }
-
-        const double tau =
-            (aqq - app) /
-            (2.0 * apq);
-
-        const double t =
-            std::copysign(
-                1.0 /
-                (
-                    std::abs(tau) +
-                    std::sqrt(
-                        1.0 +
-                        tau * tau
-                    )
-                ),
-                tau
-            );
-
-        const double c =
-            1.0 /
-            std::sqrt(
-                1.0 + t * t
-            );
-
-        const double s =
-            t * c;
-
-        matrix[p][p] =
-            app - t * apq;
-
-        matrix[q][q] =
-            aqq + t * apq;
-
-        matrix[p][q] = 0.0;
-        matrix[q][p] = 0.0;
-
-        for (std::size_t k = 0;
-             k < n;
-             ++k) {
-
-            if (k == p || k == q) {
-                continue;
-            }
-
-            const double mkp =
-                matrix[k][p];
-
-            const double mkq =
-                matrix[k][q];
-
-            matrix[k][p] =
-                c * mkp -
-                s * mkq;
-
-            matrix[p][k] =
-                matrix[k][p];
-
-            matrix[k][q] =
-                s * mkp +
-                c * mkq;
-
-            matrix[q][k] =
-                matrix[k][q];
-        }
-
-        for (std::size_t k = 0;
-             k < n;
-             ++k) {
-
-            const double vkp =
-                vectors[k][p];
-
-            const double vkq =
-                vectors[k][q];
-
-            vectors[k][p] =
-                c * vkp -
-                s * vkq;
-
-            vectors[k][q] =
-                s * vkp +
-                c * vkq;
-        }
-    }
-
-    std::size_t index = 0;
-
-    for (std::size_t i = 1;
-         i < n;
-         ++i) {
-
-        if (matrix[i][i] <
-            matrix[index][index]) {
-
-            index = i;
-        }
-    }
-
-    std::vector<double> eigenvector(n);
-
-    for (std::size_t i = 0;
-         i < n;
-         ++i) {
-
-        eigenvector[i] =
-            vectors[i][index];
-    }
-
-    double norm = 0.0;
-
-    for (double value : eigenvector) {
-        norm += value * value;
-    }
-
-    norm =
-        std::sqrt(norm);
-
-    if (!std::isfinite(norm) ||
-        norm <= DFTConstants::EPS) {
-
-        throw std::runtime_error(
-            "Autovector denso invalido."
-        );
-    }
-
-    for (double& value : eigenvector) {
-        value /= norm;
-    }
-
-    return {
-        matrix[index][index],
-        std::move(eigenvector)
-    };
-}
-
-
-std::vector<double> combine(
-    const std::vector<std::vector<double>>& basis,
-    const std::vector<double>& coefficients
-) {
-    if (basis.empty()) {
-        throw std::invalid_argument(
-            "La base no puede estar vacia."
-        );
-    }
-
-    if (basis.size() !=
-        coefficients.size()) {
-
-        throw std::invalid_argument(
-            "La base y los coeficientes no coinciden."
-        );
-    }
-
-    std::vector<double> result(
-        basis.front().size(),
-        0.0
-    );
-
-    for (std::size_t j = 0;
-         j < basis.size();
-         ++j) {
-
-        for (std::size_t i = 0;
-             i < result.size();
-             ++i) {
-
-            result[i] +=
-                coefficients[j] *
-                basis[j][i];
-        }
-    }
-
-    return result;
-}
-
-
 std::vector<double> buildHamiltonianDiagonal(
     const CartesianGrid& grid,
     const std::vector<double>& potential
@@ -692,11 +301,11 @@ bool buildIndependentVector(
             dV
         );
 
-        if (!validNorm(result, dV)) {
+        if (!davidsonValidNorm(result, dV)) {
             continue;
         }
 
-        normalize(
+        davidsonNormalize(
             result,
             dV
         );
@@ -737,11 +346,11 @@ bool buildInitialFromPrevious(
         dV
     );
 
-    if (!validNorm(result, dV)) {
+    if (!davidsonValidNorm(result, dV)) {
         return false;
     }
 
-    normalize(
+    davidsonNormalize(
         result,
         dV
     );
@@ -762,13 +371,13 @@ bool appendIndependentCorrection(
         dV
     );
 
-    orthogonalize(
+    davidsonOrthogonalize(
         correction,
         basis,
         dV
     );
 
-    if (!validNorm(
+    if (!davidsonValidNorm(
             correction,
             dV,
             SUBSPACE_TOLERANCE *
@@ -778,7 +387,7 @@ bool appendIndependentCorrection(
         return false;
     }
 
-    normalize(
+    davidsonNormalize(
         correction,
         dV,
         SUBSPACE_TOLERANCE *
@@ -934,7 +543,7 @@ MolecularOrbital solveMolecularOrbital(
                  ++i) {
 
                 const double value =
-                    dot(
+                    davidsonDot(
                         basis[i],
                         hBasis[index],
                         dV
@@ -949,8 +558,8 @@ MolecularOrbital solveMolecularOrbital(
         }
 
 
-        const Eigenpair projected =
-            diagonalize(
+        const DavidsonEigenpair projected =
+            davidsonDiagonalize(
                 projectedHamiltonian
             );
 
@@ -967,19 +576,19 @@ MolecularOrbital solveMolecularOrbital(
          * autovalor proyectado.
          */
         std::vector<double> ritz =
-            combine(
+            davidsonCombine(
                 basis,
                 projected.vector
             );
 
-        if (!validNorm(ritz, dV)) {
+        if (!davidsonValidNorm(ritz, dV)) {
 
             throw std::runtime_error(
                 "El vector de Ritz es numericamente nulo."
             );
         }
 
-        normalize(
+        davidsonNormalize(
             ritz,
             dV
         );
@@ -996,14 +605,14 @@ MolecularOrbital solveMolecularOrbital(
 
 
         finalEigenvalue =
-            rayleigh(
+            davidsonRayleigh(
                 ritz,
                 hRitz,
                 dV
             );
 
         finalResidual =
-            residualNorm(
+            davidsonResidualNorm(
                 ritz,
                 hRitz,
                 finalEigenvalue,
@@ -1075,7 +684,7 @@ MolecularOrbital solveMolecularOrbital(
          * residual fisico antes de cualquier operacion
          * de precondicionamiento.
          */
-        if (!validNorm(
+        if (!davidsonValidNorm(
                 residual,
                 dV,
                 SUBSPACE_TOLERANCE *
@@ -1105,13 +714,13 @@ MolecularOrbital solveMolecularOrbital(
                 );
             }
 
-            orthogonalize(
+            davidsonOrthogonalize(
                 independent,
                 basis,
                 dV
             );
 
-            if (!validNorm(
+            if (!davidsonValidNorm(
                     independent,
                     dV,
                     SUBSPACE_TOLERANCE *
@@ -1124,7 +733,7 @@ MolecularOrbital solveMolecularOrbital(
                 );
             }
 
-            normalize(
+            davidsonNormalize(
                 independent,
                 dV,
                 SUBSPACE_TOLERANCE *
@@ -1185,14 +794,14 @@ MolecularOrbital solveMolecularOrbital(
             );
 
             projectedHamiltonian[0][0] =
-                dot(
+                davidsonDot(
                     basis[0],
                     hBasis[0],
                     dV
                 );
 
             projectedHamiltonian[0][1] =
-                dot(
+                davidsonDot(
                     basis[0],
                     hBasis[1],
                     dV
@@ -1202,7 +811,7 @@ MolecularOrbital solveMolecularOrbital(
                 projectedHamiltonian[0][1];
 
             projectedHamiltonian[1][1] =
-                dot(
+                davidsonDot(
                     basis[1],
                     hBasis[1],
                     dV
@@ -1277,13 +886,13 @@ MolecularOrbital solveMolecularOrbital(
                     );
                 }
 
-                orthogonalize(
+                davidsonOrthogonalize(
                     correction,
                     basis,
                     dV
                 );
 
-                if (!validNorm(
+                if (!davidsonValidNorm(
                         correction,
                         dV,
                         SUBSPACE_TOLERANCE *
@@ -1296,7 +905,7 @@ MolecularOrbital solveMolecularOrbital(
                     );
                 }
 
-                normalize(
+                davidsonNormalize(
                     correction,
                     dV,
                     SUBSPACE_TOLERANCE *
@@ -1373,14 +982,14 @@ MolecularOrbital solveMolecularOrbital(
 
 
         projectedHamiltonian[0][0] =
-            dot(
+            davidsonDot(
                 basis[0],
                 hBasis[0],
                 dV
             );
 
         projectedHamiltonian[0][1] =
-            dot(
+            davidsonDot(
                 basis[0],
                 hBasis[1],
                 dV
@@ -1390,7 +999,7 @@ MolecularOrbital solveMolecularOrbital(
             projectedHamiltonian[0][1];
 
         projectedHamiltonian[1][1] =
-            dot(
+            davidsonDot(
                 basis[1],
                 hBasis[1],
                 dV
