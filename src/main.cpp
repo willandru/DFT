@@ -1,11 +1,6 @@
-#include "AtomicDFT.h"
 #include "CartesianGrid.h"
-#include "DFTConstants.h"
-#include "ElectronicConfiguration.h"
 #include "Molecule.h"
-#include "PBE96.h"
 #include "PZ81.h"
-#include "RadialGrid.h"
 #include "SelfConsistentFieldMolecule.h"
 
 #include <iomanip>
@@ -15,101 +10,66 @@ int main()
 {
     try
     {
-        RadialGrid grid(
-            DFTConstants::GRID_POINTS,
-            DFTConstants::RMAX
-        );
-
         PZ81 pz81;
-        PBE96 pbe96;
-
-        // ============================================================
-        // PRIMEROS 5 ATOMOS - PZ81
-        // ============================================================
 
         std::cout
             << "============================================================\n"
-            << "PRIMEROS 5 ATOMOS - PZ81\n"
+            << "MOLECULAS ORGANICAS - PZ81\n"
             << "============================================================\n";
 
-        for (int Z = 1; Z <= 5; ++Z)
-        {
-            const AtomicConfiguration configuration =
-                getAtomicConfiguration(Z);
-
-            const AtomicResult result =
-                solveAtom(
-                    grid,
-                    configuration,
-                    pz81
-                );
-
-            std::cout
-                << configuration.symbol
-                << " | PZ81 | E = "
-                << std::scientific
-                << std::setprecision(10)
-                << result.scf.energy.total
-                << " Ha\n";
-        }
-
         // ============================================================
-        // PRIMEROS 5 ATOMOS - PBE96
-        // ============================================================
-
-        std::cout
-            << "\n"
-            << "============================================================\n"
-            << "PRIMEROS 5 ATOMOS - PBE96\n"
-            << "============================================================\n";
-
-        for (int Z = 1; Z <= 5; ++Z)
-        {
-            const AtomicConfiguration configuration =
-                getAtomicConfiguration(Z);
-
-            const AtomicResult result =
-                solveAtom(
-                    grid,
-                    configuration,
-                    pbe96
-                );
-
-            std::cout
-                << configuration.symbol
-                << " | PBE96 | E = "
-                << std::scientific
-                << std::setprecision(10)
-                << result.scf.energy.total
-                << " Ha\n";
-        }
-
-        // ============================================================
-        // MOLECULA H2 - PZ81
+        // CH2O - FORMALDEHIDO
         //
-        // Multiplicidad = 1 (singlete)
+        // Geometria aproximadamente trigonal plana:
+        //
+        //       H
+        //       |
+        // H - C = O
+        //
+        // C  = ( 0.000,  0.000,  0.000)
+        // O  = ( 0.000,  0.000,  2.300)
+        // H1 = ( 1.770,  0.000, -0.590)
+        // H2 = (-1.770,  0.000, -0.590)
+        //
+        // Electrones = 16
+        // Carga = 0
+        // Multiplicidad = 1
         // ============================================================
 
-        Molecule h2(0);
+        Molecule ch2o(0);
 
-        h2.addNucleus(
-            1,
-            -0.7,
-            0.0,
-            0.0
+        ch2o.addNucleus(
+            6,
+            0.000,
+            0.000,
+            0.000
         );
 
-        h2.addNucleus(
-            1,
-            0.7,
-            0.0,
-            0.0
+        ch2o.addNucleus(
+            8,
+            0.000,
+            0.000,
+            2.300
         );
 
-        CartesianGrid molecularGrid(
-            7,
-            7,
-            7,
+        ch2o.addNucleus(
+            1,
+            1.770,
+            0.000,
+            -0.590
+        );
+
+        ch2o.addNucleus(
+            1,
+            -1.770,
+            0.000,
+            -0.590
+        );
+
+        CartesianGrid ch2oGrid(
+            15,
+            15,
+            15,
             -8.1,
             7.9,
             -8.1,
@@ -118,191 +78,351 @@ int main()
             7.9
         );
 
-        const MolecularResult h2PZ81 =
+        const MolecularResult ch2oPZ81 =
             solveMolecularSelfConsistentField(
-                molecularGrid,
-                h2,
-                h2.getCharge(),
+                ch2oGrid,
+                ch2o,
+                ch2o.getCharge(),
                 1,
                 pz81
             );
 
         std::cout
-            << "\n"
-            << "H2 | PZ81 | E = "
+            << "\nCH2O | PZ81 | E = "
             << std::scientific
             << std::setprecision(10)
-            << h2PZ81.scf.energy.total
+            << ch2oPZ81.scf.energy.total
             << " Ha\n";
 
         // ============================================================
-        // MOLECULA H2O - PZ81
+        // HCN - CIANURO DE HIDROGENO
+        //
+        // Geometria lineal:
+        //
+        // H - C = N
+        //
+        // H  = (-2.000, 0.000, 0.000)
+        // C  = ( 0.000, 0.000, 0.000)
+        // N  = ( 2.180, 0.000, 0.000)
+        //
+        // Electrones = 14
+        // Carga = 0
+        // Multiplicidad = 1
+        // ============================================================
+
+        Molecule hcn(0);
+
+        hcn.addNucleus(
+            1,
+            -2.000,
+            0.000,
+            0.000
+        );
+
+        hcn.addNucleus(
+            6,
+            0.000,
+            0.000,
+            0.000
+        );
+
+        hcn.addNucleus(
+            7,
+            2.180,
+            0.000,
+            0.000
+        );
+
+        CartesianGrid hcnGrid(
+            15,
+            15,
+            15,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9
+        );
+
+        const MolecularResult hcnPZ81 =
+            solveMolecularSelfConsistentField(
+                hcnGrid,
+                hcn,
+                hcn.getCharge(),
+                1,
+                pz81
+            );
+
+        std::cout
+            << "\nHCN | PZ81 | E = "
+            << std::scientific
+            << std::setprecision(10)
+            << hcnPZ81.scf.energy.total
+            << " Ha\n";
+
+        // ============================================================
+        // C2H2 - ACETILENO
+        //
+        // Geometria lineal:
+        //
+        // H - C = C - H
+        //
+        // H1 = (-3.000, 0.000, 0.000)
+        // C1 = (-1.150, 0.000, 0.000)
+        // C2 = ( 1.150, 0.000, 0.000)
+        // H2 = ( 3.000, 0.000, 0.000)
+        //
+        // Electrones = 14
+        // Carga = 0
+        // Multiplicidad = 1
+        // ============================================================
+
+        Molecule c2h2(0);
+
+        c2h2.addNucleus(
+            1,
+            -3.000,
+            0.000,
+            0.000
+        );
+
+        c2h2.addNucleus(
+            6,
+            -1.150,
+            0.000,
+            0.000
+        );
+
+        c2h2.addNucleus(
+            6,
+            1.150,
+            0.000,
+            0.000
+        );
+
+        c2h2.addNucleus(
+            1,
+            3.000,
+            0.000,
+            0.000
+        );
+
+        CartesianGrid c2h2Grid(
+            17,
+            17,
+            17,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9
+        );
+
+        const MolecularResult c2h2PZ81 =
+            solveMolecularSelfConsistentField(
+                c2h2Grid,
+                c2h2,
+                c2h2.getCharge(),
+                1,
+                pz81
+            );
+
+        std::cout
+            << "\nC2H2 | PZ81 | E = "
+            << std::scientific
+            << std::setprecision(10)
+            << c2h2PZ81.scf.energy.total
+            << " Ha\n";
+
+        // ============================================================
+        // C2H4 - ETENO
+        //
+        // Geometria plana:
+        //
+        //        H       H
+        //         \     /
+        //          C = C
+        //         /     \
+        //        H       H
+        //
+        // C1 = (-1.270, 0.000, 0.000)
+        // C2 = ( 1.270, 0.000, 0.000)
+        //
+        // H1 = (-2.300,  1.740, 0.000)
+        // H2 = (-2.300, -1.740, 0.000)
+        // H3 = ( 2.300,  1.740, 0.000)
+        // H4 = ( 2.300, -1.740, 0.000)
+        //
+        // Electrones = 16
+        // Carga = 0
+        // Multiplicidad = 1
+        // ============================================================
+
+        Molecule c2h4(0);
+
+        c2h4.addNucleus(
+            6,
+            -1.270,
+            0.000,
+            0.000
+        );
+
+        c2h4.addNucleus(
+            6,
+            1.270,
+            0.000,
+            0.000
+        );
+
+        c2h4.addNucleus(
+            1,
+            -2.300,
+            1.740,
+            0.000
+        );
+
+        c2h4.addNucleus(
+            1,
+            -2.300,
+            -1.740,
+            0.000
+        );
+
+        c2h4.addNucleus(
+            1,
+            2.300,
+            1.740,
+            0.000
+        );
+
+        c2h4.addNucleus(
+            1,
+            2.300,
+            -1.740,
+            0.000
+        );
+
+        CartesianGrid c2h4Grid(
+            17,
+            17,
+            17,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9,
+            -8.1,
+            7.9
+        );
+
+        const MolecularResult c2h4PZ81 =
+            solveMolecularSelfConsistentField(
+                c2h4Grid,
+                c2h4,
+                c2h4.getCharge(),
+                1,
+                pz81
+            );
+
+        std::cout
+            << "\nC2H4 | PZ81 | E = "
+            << std::scientific
+            << std::setprecision(10)
+            << c2h4PZ81.scf.energy.total
+            << " Ha\n";
+
+        // ============================================================
+        // C2H6 - ETANO
         //
         // Geometria aproximada:
         //
-        // O  = ( 0.000,  0.000, 0.000) bohr
-        // H1 = ( 1.430,  0.000, 1.108) bohr
-        // H2 = (-1.430,  0.000, 1.108) bohr
+        //      H   H
+        //       \ /
+        //        C-C
+        //       /   \
+        //      H     H
+        //       \   /
+        //        H H
         //
-        // Carga molecular = 0
-        // Electrones = 10
-        // Multiplicidad = 1 (singlete)
+        // C1 = (-1.260, 0.000, 0.000)
+        // C2 = ( 1.260, 0.000, 0.000)
+        //
+        // H1 = (-2.000,  1.650,  0.000)
+        // H2 = (-2.000, -0.825,  1.429)
+        // H3 = (-2.000, -0.825, -1.429)
+        //
+        // H4 = ( 2.000,  1.650,  0.000)
+        // H5 = ( 2.000, -0.825,  1.429)
+        // H6 = ( 2.000, -0.825, -1.429)
+        //
+        // Electrones = 18
+        // Carga = 0
+        // Multiplicidad = 1
         // ============================================================
 
-        Molecule h2o(0);
+        Molecule c2h6(0);
 
-        h2o.addNucleus(
-            8,
-            0.0,
-            0.0,
-            0.0
-        );
-
-        h2o.addNucleus(
-            1,
-            1.430,
-            0.0,
-            1.108
-        );
-
-        h2o.addNucleus(
-            1,
-            -1.430,
-            0.0,
-            1.108
-        );
-
-        CartesianGrid waterGrid(
-            9,
-            9,
-            9,
-            -8.1,
-            7.9,
-            -8.1,
-            7.9,
-            -8.1,
-            7.9
-        );
-
-        const MolecularResult h2oPZ81 =
-            solveMolecularSelfConsistentField(
-                waterGrid,
-                h2o,
-                h2o.getCharge(),
-                1,
-                pz81
-            );
-
-        std::cout
-            << "\n"
-            << "H2O | PZ81 | E = "
-            << std::scientific
-            << std::setprecision(10)
-            << h2oPZ81.scf.energy.total
-            << " Ha\n";
-
-        // ============================================================
-        // MOLECULA N2 - PZ81
-        //
-        // Geometria lineal aproximada:
-        //
-        // N1 = (-1.037, 0.000, 0.000) bohr
-        // N2 = ( 1.037, 0.000, 0.000) bohr
-        //
-        // Carga molecular = 0
-        // Electrones = 14
-        // Multiplicidad = 1 (singlete)
-        // ============================================================
-
-        Molecule n2(0);
-
-        n2.addNucleus(
-            7,
-            -1.037,
-            0.0,
-            0.0
-        );
-
-        n2.addNucleus(
-            7,
-            1.037,
-            0.0,
-            0.0
-        );
-
-        CartesianGrid n2Grid(
-            15,
-            15,
-            15,
-            -8.1,
-            7.9,
-            -8.1,
-            7.9,
-            -8.1,
-            7.9
-        );
-
-        const MolecularResult n2PZ81 =
-            solveMolecularSelfConsistentField(
-                n2Grid,
-                n2,
-                n2.getCharge(),
-                1,
-                pz81
-            );
-
-        std::cout
-            << "\n"
-            << "N2 | PZ81 | E = "
-            << std::scientific
-            << std::setprecision(10)
-            << n2PZ81.scf.energy.total
-            << " Ha\n";
-
-        // ============================================================
-        // MOLECULA CO2 - PZ81
-        //
-        // Geometria lineal aproximada:
-        //
-        // O1 = (-2.192, 0.000, 0.000) bohr
-        // C  = ( 0.000, 0.000, 0.000) bohr
-        // O2 = ( 2.192, 0.000, 0.000) bohr
-        //
-        // Distancia C-O ~ 1.16 A
-        // Angulo O-C-O = 180 grados
-        //
-        // Carga molecular = 0
-        // Electrones = 22
-        // Multiplicidad = 1 (singlete)
-        // ============================================================
-
-        Molecule co2(0);
-
-        co2.addNucleus(
+        c2h6.addNucleus(
             6,
-            0.0,
-            0.0,
-            0.0
+            -1.260,
+            0.000,
+            0.000
         );
 
-        co2.addNucleus(
-            8,
-            -2.192,
-            0.0,
-            0.0
+        c2h6.addNucleus(
+            6,
+            1.260,
+            0.000,
+            0.000
         );
 
-        co2.addNucleus(
-            8,
-            2.192,
-            0.0,
-            0.0
+        c2h6.addNucleus(
+            1,
+            -2.000,
+            1.650,
+            0.000
         );
 
-        CartesianGrid co2Grid(
-            15,
-            15,
-            15,
+        c2h6.addNucleus(
+            1,
+            -2.000,
+            -0.825,
+            1.429
+        );
+
+        c2h6.addNucleus(
+            1,
+            -2.000,
+            -0.825,
+            -1.429
+        );
+
+        c2h6.addNucleus(
+            1,
+            2.000,
+            1.650,
+            0.000
+        );
+
+        c2h6.addNucleus(
+            1,
+            2.000,
+            -0.825,
+            1.429
+        );
+
+        c2h6.addNucleus(
+            1,
+            2.000,
+            -0.825,
+            -1.429
+        );
+
+        CartesianGrid c2h6Grid(
+            19,
+            19,
+            19,
             -8.1,
             7.9,
             -8.1,
@@ -311,61 +431,99 @@ int main()
             7.9
         );
 
-        const MolecularResult co2PZ81 =
+        const MolecularResult c2h6PZ81 =
             solveMolecularSelfConsistentField(
-                co2Grid,
-                co2,
-                co2.getCharge(),
+                c2h6Grid,
+                c2h6,
+                c2h6.getCharge(),
                 1,
                 pz81
             );
 
         std::cout
-            << "\n"
-            << "CO2 | PZ81 | E = "
+            << "\nC2H6 | PZ81 | E = "
             << std::scientific
             << std::setprecision(10)
-            << co2PZ81.scf.energy.total
+            << c2h6PZ81.scf.energy.total
             << " Ha\n";
 
         // ============================================================
-        // MOLECULA O2 - PZ81
+        // CH3OH - METANOL
         //
-        // Geometria lineal aproximada:
+        // Geometria aproximada:
         //
-        // O1 = (-1.141, 0.000, 0.000) bohr
-        // O2 = ( 1.141, 0.000, 0.000) bohr
+        //       H
+        //       |
+        //   H - C - O - H
+        //       |
+        //       H
         //
-        // Carga molecular = 0
-        // Electrones = 16
-        // Multiplicidad = 3 (triplete)
+        // C  = ( 0.000,  0.000,  0.000)
+        // O  = ( 2.400,  0.000,  0.000)
         //
-        // Para el triplete:
+        // H del grupo CH3:
         //
-        // N_alpha = 9
-        // N_beta  = 7
+        // H1 = (-0.700,  1.700,  0.000)
+        // H2 = (-0.700, -0.850,  1.472)
+        // H3 = (-0.700, -0.850, -1.472)
+        //
+        // H del grupo OH:
+        //
+        // H4 = ( 3.300,  0.000,  1.400)
+        //
+        // Electrones = 18
+        // Carga = 0
+        // Multiplicidad = 1
         // ============================================================
 
-        Molecule o2(0);
+        Molecule ch3oh(0);
 
-        o2.addNucleus(
-            8,
-            -1.141,
-            0.0,
-            0.0
+        ch3oh.addNucleus(
+            6,
+            0.000,
+            0.000,
+            0.000
         );
 
-        o2.addNucleus(
+        ch3oh.addNucleus(
             8,
-            1.141,
-            0.0,
-            0.0
+            2.400,
+            0.000,
+            0.000
         );
 
-        CartesianGrid o2Grid(
-            15,
-            15,
-            15,
+        ch3oh.addNucleus(
+            1,
+            -0.700,
+            1.700,
+            0.000
+        );
+
+        ch3oh.addNucleus(
+            1,
+            -0.700,
+            -0.850,
+            1.472
+        );
+
+        ch3oh.addNucleus(
+            1,
+            -0.700,
+            -0.850,
+            -1.472
+        );
+
+        ch3oh.addNucleus(
+            1,
+            3.300,
+            0.000,
+            1.400
+        );
+
+        CartesianGrid ch3ohGrid(
+            19,
+            19,
+            19,
             -8.1,
             7.9,
             -8.1,
@@ -374,22 +532,27 @@ int main()
             7.9
         );
 
-        const MolecularResult o2PZ81 =
+        const MolecularResult ch3ohPZ81 =
             solveMolecularSelfConsistentField(
-                o2Grid,
-                o2,
-                o2.getCharge(),
-                3,
+                ch3ohGrid,
+                ch3oh,
+                ch3oh.getCharge(),
+                1,
                 pz81
             );
 
         std::cout
-            << "\n"
-            << "O2 | PZ81 | E = "
+            << "\nCH3OH | PZ81 | E = "
             << std::scientific
             << std::setprecision(10)
-            << o2PZ81.scf.energy.total
+            << ch3ohPZ81.scf.energy.total
             << " Ha\n";
+
+        std::cout
+            << "\n"
+            << "============================================================\n"
+            << "FIN DEL ANALISIS\n"
+            << "============================================================\n";
 
         return 0;
     }
